@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sayosign-desktop"
+version = "0.1.0"
+description = "Sign and install IPA files on your iPhone from Linux, Windows or macOS"
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+requires-python = ">=3.10"
+dependencies = ["aiohttp>=3.9", "cryptography>=42", "pymobiledevice3>=4"]
+
+[project.optional-dependencies]
+window = ["pywebview>=5"]
+
+[project.scripts]
+sayosign-desktop = "sayosign_desktop.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["sayosign_desktop*"]
+
+[tool.setuptools.package-data]
+sayosign_desktop = ["web/*", "web/lens/*", "bin/*"]

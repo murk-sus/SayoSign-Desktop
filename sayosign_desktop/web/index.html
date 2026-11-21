@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SayoSign</title>
+<link rel="icon" href="/static/icon.png">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="brand"><img src="/static/icon.png" alt=""><span>SayoSign</span></div>
+    <nav>
+      <button class="nav on" data-view="sign"><span class="ni">✒️</span><span data-t="navSign"></span></button>
+      <button class="nav" data-view="certs"><span class="ni">🔐</span><span data-t="navCerts"></span></button>
+      <button class="nav" data-view="device"><span class="ni">📱</span><span data-t="navDevice"></span></button>
+    </nav>
+    <div class="side-foot">
+      <div class="langs"><button data-lang="en">EN</button><button data-lang="ru">RU</button><button data-lang="zh">中文</button></div>
+      <a href="https://murk-sus.github.io/donate/" target="_blank" rel="noopener" class="donate">💖 <span data-t="donate"></span></a>
+    </div>
+  </aside>
+
+  <main>
+    <!-- SIGN -->
+    <section id="view-sign" class="view on">
+      <header class="vh"><h1 data-t="signTitle"></h1><p class="muted" data-t="signSub"></p></header>
+      <div class="sign-grid">
+        <div class="col">
+          <div id="ipa-drop" class="drop" tabindex="0" role="button">
+            <div class="bow">🎀</div>
+            <div class="drop-title" data-t="dropIpa"></div>
+            <div class="muted small" data-t="dropIpaHint"></div>
+          </div>
+          <input id="ipa-input" type="file" accept=".ipa,.tipa" hidden>
+          <div id="ipa-card" class="card app" hidden></div>
+        </div>
+
+        <div class="col">
+          <div class="card">
+            <label class="field"><span data-t="certificate"></span>
+              <select id="cert-select"></select>
+            </label>
+            <label class="field"><span data-t="device"></span>
+              <div class="row-inline">
+                <select id="device-select"></select>
+                <button class="icon-btn" id="device-refresh" title="Refresh">↻</button>
+              </div>
+            </label>
+            <div class="two">
+              <label class="field"><span data-t="appName"></span><input id="opt-name"></label>
+              <label class="field"><span data-t="bundleId"></span><input id="opt-bundle" spellcheck="false"></label>
+            </div>
+            <div class="two">
+              <label class="field"><span data-t="version"></span><input id="opt-version"></label>
+              <label class="field"><span data-t="compression"></span>
+                <select id="opt-z"><option value="">—</option><option value="0" data-t="zNone"></option><option value="1" data-t="zFast"></option><option value="6" data-t="zBalanced"></option><option value="9" data-t="zSmall"></option></select>
+              </label>
+            </div>
+            <div class="field">
+              <span data-t="tweaks"></span>
+              <div id="tweak-list" class="chips"></div>
+              <button class="ghost" id="tweak-add" data-t="addTweak"></button>
+              <input id="tweak-input" type="file" accept=".deb,.dylib" multiple hidden>
+            </div>
+            <label class="toggle"><input type="checkbox" id="opt-x"><span data-t="removePlugins"></span></label>
+            <label class="toggle"><input type="checkbox" id="opt-w"><span data-t="removeWatch"></span></label>
+            <label class="toggle"><input type="checkbox" id="opt-f"><span data-t="fileSharing"></span></label>
+          </div>
+          <div class="actions">
+            <button class="primary" id="go-install" data-t="signInstall"></button>
+            <button class="secondary" id="go-sign" data-t="signOnly"></button>
+          </div>
+          <div id="job" class="card job" hidden></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CERTS -->
+    <section id="view-certs" class="view">
+      <header class="vh"><h1 data-t="certsTitle"></h1><p class="muted" data-t="certsSub"></p></header>
+      <div class="card add-cert">
+        <h3 data-t="addCert"></h3>
+        <div class="two">
+          <button class="filepick" id="pick-p12"><span class="fp-ico">🔑</span><span class="fp-name" data-t="pickP12"></span></button>
+          <button class="filepick" id="pick-prov"><span class="fp-ico">📜</span><span class="fp-name" data-t="pickProv"></span></button>
+        </div>
+        <input id="p12-input" type="file" accept=".p12,.pfx" hidden>
+        <input id="prov-input" type="file" accept=".mobileprovision" hidden>
+        <div class="two">
+          <label class="field"><span data-t="password"></span><input id="cert-pw" type="password" autocomplete="off"></label>
+          <label class="field"><span data-t="nickname"></span><input id="cert-nick"></label>
+        </div>
+        <p class="muted small" data-t="pwHint"></p>
+        <button class="primary" id="cert-save" data-t="add"></button>
+        <p id="cert-msg" class="msg"></p>
+      </div>
+      <div id="cert-list" class="cert-list"></div>
+    </section>
+
+    <!-- DEVICE -->
+    <section id="view-device" class="view">
+      <header class="vh"><h1 data-t="deviceTitle"></h1><p class="muted" data-t="deviceSub"></p></header>
+      <div id="device-info"></div>
+      <div class="card">
+        <div class="row-inline between"><h3 data-t="installedApps"></h3><button class="icon-btn" id="apps-refresh">↻</button></div>
+        <input id="apps-search" class="search" data-tp="search">
+        <div id="apps-list" class="apps"></div>
+      </div>
+    </section>
+  </main>
+</div>
+<div id="toast" class="toast" hidden></div>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>
