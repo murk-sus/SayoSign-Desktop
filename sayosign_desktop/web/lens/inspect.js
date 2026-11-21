@@ -1,6 +1,9 @@
 import { openZip } from "./zip.js";
 import { parsePlist, parseProvision } from "./plist.js";
-import { slices, parseMachO, headerSpan, injectedLibs } from "./macho.js";
+import { slices, parseMachO, headerSpan, injectedLibs, entitlementsXML, privilegedEntitlements } from "./macho.js";
+import { detectSDKs, scanBinary } from "./sdks.js";
+
+const DEEP_LIMIT = 256 * 1024 * 1024; // read whole binaries up to this size for entitlements and SDK scan
 import { uncrush } from "./png.js";
 
 const HOOK_FRAMEWORKS = /^(CydiaSubstrate|ellekit|libhooker|substitute|Orion|Cephei|CepheiPrefs|AltList)\.framework$/i;
@@ -35,16 +38,28 @@ export async function inspectProvisionFile(buf) {
   return summarizeProvision(parseProvision(buf));
 }
 
-async function readBinary(zip, path) {
+async function readBinary(zip, path, deep = true) {
   const e = zip.entries.get(path);
   if (!e) return null;
   let head = await zip.read(e, 65536);
   const need = Math.min(e.size, headerSpan(head));
   if (need > head.length) head = await zip.read(e, need);
   const out = { size: e.size, slices: [] };
-  for (const s of slices(head)) {
+  const sl = slices(head);
+  for (const s of sl) {
     if (s.offset + 32 > head.length) continue;
-    try { out.slices.push(parseMachO(head, s.offset)); } catch { /* not Mach-O */ }
+    try { out.slices.push({ ...parseMachO(head, s.offset), offset: s.offset }); } catch { /* not Mach-O */ }
+  }
+  // Deep scan: entitlements live in the code signature near the end of the first slice.
+  const first = out.slices.find((x) => x.sigOff);
+  const end = first ? first.offset + first.sigOff + first.sigSize : 0;
+  if (deep && first && end <= DEEP_LIMIT) {
+    const full = await zip.read(e, end);
+    const xml = entitlementsXML(full, first.offset + first.sigOff, first.sigSize);
+    if (xml) { try { out.entitlements = parsePlist(new TextEncoder().encode(xml)); } catch { /* bad plist */ } }
+    out.binaryHits = scanBinary(full.subarray(first.offset, first.offset + first.sigOff));
+  } else if (deep && e.size <= DEEP_LIMIT) {
+    out.binaryHits = scanBinary(await zip.read(e));
   }
   return out;
 }
@@ -74,7 +89,7 @@ function pickIcon(info, appDir, names) {
   return best;
 }
 
-export async function inspectIPA(blob) {
+export async function inspectIPA(blob, { deep = true } = {}) {
   const zip = await openZip(blob);
   const names = zip.names();
   const plistPath = names
@@ -115,7 +130,7 @@ export async function inspectIPA(blob) {
   r.signed = names.includes(appDir + "_CodeSignature/CodeResources");
   r.hasSCInfo = names.some((n) => n.startsWith(appDir + "SC_Info/"));
 
-  const bin = await readBinary(zip, appDir + r.executable);
+  const bin = await readBinary(zip, appDir + r.executable, deep);
   if (bin) {
     r.binarySize = bin.size;
     r.slices = bin.slices;
@@ -124,6 +139,9 @@ export async function inspectIPA(blob) {
     const libs = [...new Set(bin.slices.flatMap((s) => [...s.dylibs, ...s.weak]))];
     r.linked = libs;
     r.injected = injectedLibs(libs);
+    r.entitlements = bin.entitlements || null;
+    r.privileged = privilegedEntitlements(bin.entitlements);
+    r.binaryHits = bin.binaryHits;
   }
 
   const prov = await zip.read(appDir + "embedded.mobileprovision");
@@ -136,6 +154,8 @@ export async function inspectIPA(blob) {
     try { r.icon = await uncrush(await zip.read(iconPath)); } catch { /* unreadable */ }
   }
   r.tweaked = !!(r.injected?.length || r.hookFrameworks.length);
+  r.sdks = detectSDKs(r, r.binaryHits || new Set());
+  delete r.binaryHits;
   return r;
 }
 

@@ -71,7 +71,11 @@ export function parseMachO(buf, off = 0) {
         info.sdk = ver(dv.getUint32(p + 16, true));
         break;
       }
-      case 0x1d: info.signed = true; break; // CODE_SIGNATURE
+      case 0x1d: // CODE_SIGNATURE
+        info.signed = true;
+        info.sigOff = dv.getUint32(p + 8, true);
+        info.sigSize = dv.getUint32(p + 12, true);
+        break;
     }
     p += size;
   }
@@ -88,4 +92,30 @@ export function injectedLibs(dylibs) {
   const hooks = /substrate|substitute|ellekit|libhooker|sayohook|fishhook|tweakinject/i;
   return dylibs.filter((d) => hooks.test(d) || /^@(executable|loader)_path\/.*\.dylib$/.test(d) ||
     (/^@rpath\/.*\.dylib$/.test(d) && !/libswift/i.test(d)));
+}
+
+// Reads entitlements from a code signature SuperBlob (big-endian). Returns XML text or null.
+export function entitlementsXML(buf, off, size) {
+  if (off + 12 > buf.length) return null;
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  if (dv.getUint32(off) !== 0xfade0cc0) return null;
+  const count = dv.getUint32(off + 8);
+  for (let i = 0; i < count; i++) {
+    const blob = off + dv.getUint32(off + 12 + i * 8 + 4);
+    if (blob + 8 > buf.length) continue;
+    if (dv.getUint32(blob) === 0xfade7171) {
+      const len = dv.getUint32(blob + 4);
+      return td.decode(buf.subarray(blob + 8, blob + len));
+    }
+  }
+  return null;
+}
+
+// Entitlements that stock iOS only grants to Apple, TrollStore or a jailbreak.
+export function privilegedEntitlements(ent) {
+  return Object.keys(ent || {}).filter((k) =>
+    /^com\.apple\.private\./.test(k) || ["platform-application", "com.apple.security.no-container",
+      "com.apple.security.no-sandbox", "task_for_pid-allow", "com.apple.system-task-ports",
+      "run-unsigned-code", "dynamic-codesigning", "com.apple.springboard.debugapplications",
+      "com.apple.rootless.install", "com.apple.security.exception.files.absolute-path.read-write"].includes(k));
 }
