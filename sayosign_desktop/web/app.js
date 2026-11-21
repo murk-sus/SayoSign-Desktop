@@ -29,6 +29,10 @@ const S = {
     added: "Certificate added", removeConfirm: "Delete this certificate?", uninstall: "Delete",
     uninstallConfirm: "Delete {name} from your iPhone?", deleted: "Deleted", daysLeft: "{n} days left", expired: "expired",
     cliMissing: "The signing engine was not found. Run `make` in the SayoSign folder.",
+    orWord: "or", appleidSignin: "🍎 Sign in with Apple ID", appleidTitle: "Sign in with Apple ID",
+    appleidHint: "Use a free or paid developer account. A certificate and profile are created for you. Needs an anisette server.",
+    anisette: "Anisette server", appleid2fa: "Apple sent a code to your trusted devices. Enter it below.", code: "Code",
+    continue: "Continue", appleidDone: "Signed in 🎀", appleidKind: "Apple ID",
     deviceNotInProfile: "Warning: this iPhone is not in the certificate's profile, the app will not open.",
   },
   ru: {
@@ -58,6 +62,10 @@ const S = {
     added: "Сертификат добавлен", removeConfirm: "Удалить этот сертификат?", uninstall: "Удалить",
     uninstallConfirm: "Удалить {name} с айфона?", deleted: "Удалено", daysLeft: "осталось {n} дн.", expired: "истёк",
     cliMissing: "Движок подписи не найден. Выполни `make` в папке SayoSign.",
+    orWord: "или", appleidSignin: "🍎 Войти через Apple ID", appleidTitle: "Вход через Apple ID",
+    appleidHint: "Бесплатный или платный аккаунт разработчика. Сертификат и профиль создаются автоматически. Нужен anisette-сервер.",
+    anisette: "Anisette-сервер", appleid2fa: "Apple отправил код на доверенные устройства. Введи его ниже.", code: "Код",
+    continue: "Продолжить", appleidDone: "Вход выполнен 🎀", appleidKind: "Apple ID",
     deviceNotInProfile: "Внимание: этого айфона нет в профиле сертификата, приложение не откроется.",
   },
   zh: {
@@ -87,6 +95,10 @@ const S = {
     added: "证书已添加", removeConfirm: "删除此证书？", uninstall: "删除",
     uninstallConfirm: "从 iPhone 删除 {name}？", deleted: "已删除", daysLeft: "剩余 {n} 天", expired: "已过期",
     cliMissing: "未找到签名引擎。请在 SayoSign 目录中运行 `make`。",
+    orWord: "或", appleidSignin: "🍎 使用 Apple ID 登录", appleidTitle: "使用 Apple ID 登录",
+    appleidHint: "使用免费或付费开发者账号，自动创建证书和描述文件。需要 anisette 服务器。",
+    anisette: "Anisette 服务器", appleid2fa: "Apple 已向你的受信任设备发送验证码，请在下方输入。", code: "验证码",
+    continue: "继续", appleidDone: "已登录 🎀", appleidKind: "Apple ID",
     deviceNotInProfile: "注意：此 iPhone 不在证书的描述文件中，应用将无法打开。",
   },
 };
@@ -241,6 +253,7 @@ $("#tweak-list").addEventListener("click", (e) => {
 // ---------- certificates ----------
 async function loadCerts() {
   try { st.certs = await api("/api/certs"); } catch { st.certs = []; }
+  try { st.accounts = await api("/api/appleid"); } catch { st.accounts = []; }
   renderCerts();
 }
 function certStatus(c) {
@@ -256,10 +269,12 @@ function expiryBadge(iso) {
 function renderCerts() {
   const sel = $("#cert-select");
   const prev = sel.value;
-  sel.innerHTML = st.certs.length
-    ? st.certs.filter((c) => !c.error).map((c) => `<option value="${c.id}">${c.ocsp?.status === "REVOKED" ? "⛔ " : c.ocsp?.status === "GOOD" ? "🟢 " : ""}${esc(c.nickname || c.team || c.name)} · ${esc(c.profile?.type || "")}</option>`).join("")
-    : `<option value="">${t("noCert")}</option>`;
+  const accounts = st.accounts || [];
+  const certOpts = st.certs.filter((c) => !c.error).map((c) => `<option value="${c.id}">${c.ocsp?.status === "REVOKED" ? "⛔ " : c.ocsp?.status === "GOOD" ? "🟢 " : ""}${esc(c.nickname || c.team || c.name)} · ${esc(c.profile?.type || "")}</option>`).join("");
+  const aidOpts = accounts.map((a) => `<option value="${a.id}">🍎 ${esc(a.email)} · ${esc(a.team)}</option>`).join("");
+  sel.innerHTML = (certOpts || aidOpts) ? certOpts + aidOpts : `<option value="">${t("noCert")}</option>`;
   if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  renderAccounts(accounts);
 
   const udids = st.devices.map((d) => d.udid.toUpperCase());
   $("#cert-list").innerHTML = st.certs.map((c) => {
@@ -330,6 +345,51 @@ $("#cert-save").addEventListener("click", async () => {
     msg.textContent = err.message;
   }
   btn.disabled = false;
+});
+
+// ---------- Apple ID ----------
+function renderAccounts(accounts) {
+  const host = $("#cert-list");
+  const extra = accounts.map((a) => `<div class="card cert">
+      <div class="row-inline between"><h3>🍎 ${esc(a.email)}</h3><span class="badge good">Apple ID</span></div>
+      <dl class="kv">
+        <dt>${t("team")}</dt><dd>${esc(a.team)} <span class="mono muted">${esc(a.teamId)}</span></dd>
+        <dt>${t("expires")}</dt><dd>${expiryBadge(a.expires)}</dd>
+      </dl>
+      <div class="row-inline" style="margin-top:12px"><button class="danger" data-aiddel="${a.id}">${t("remove")}</button></div>
+    </div>`).join("");
+  host.insertAdjacentHTML("afterbegin", extra);
+}
+let aidState = null;
+$("#appleid-btn").addEventListener("click", (e) => {
+  e.preventDefault();
+  aidState = null;
+  $("#appleid-step1").hidden = false; $("#appleid-step2").hidden = true;
+  $("#aid-msg").textContent = ""; $("#aid-submit").textContent = t("continue");
+  $("#appleid-dialog").showModal();
+});
+$("#appleid-form").addEventListener("submit", async (e) => {
+  if (e.submitter && e.submitter.value === "cancel") return;
+  e.preventDefault();
+  const msg = $("#aid-msg"); msg.className = "msg"; msg.textContent = "…";
+  const submit = $("#aid-submit"); submit.disabled = true;
+  try {
+    if (!aidState) {
+      const r = await api("/api/appleid/login", { method: "POST", body: JSON.stringify({
+        email: $("#aid-email").value.trim(), password: $("#aid-pass").value, anisette: $("#aid-anisette").value.trim() }) });
+      if (r.needs2FA) { aidState = r.id; $("#appleid-step1").hidden = true; $("#appleid-step2").hidden = false; msg.textContent = ""; $("#aid-code").focus(); }
+      else { done(); }
+    } else {
+      await api("/api/appleid/2fa", { method: "POST", body: JSON.stringify({ id: aidState, code: $("#aid-code").value.trim() }) });
+      done();
+    }
+  } catch (err) { msg.className = "msg bad note"; msg.textContent = err.message; }
+  submit.disabled = false;
+  function done() { $("#appleid-dialog").close(); toast(t("appleidDone")); loadCerts(); }
+});
+$("#cert-list").addEventListener("click", async (e) => {
+  const d = e.target.closest("[data-aiddel]");
+  if (d && confirm(t("removeConfirm"))) { await api(`/api/appleid/${d.dataset.aiddel}`, { method: "DELETE" }); loadCerts(); }
 });
 
 // ---------- devices ----------

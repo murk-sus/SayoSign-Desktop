@@ -12,11 +12,18 @@ import shutil
 import sys
 import urllib.parse
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from aiohttp import web
 
 from . import device
+import plistlib
+import zipfile
+
+from cryptography.hazmat.primitives import serialization
+
+from . import appleid as aid
 from .certs import CertError, CertStore
 
 HERE = Path(__file__).parent
@@ -60,10 +67,83 @@ class Job:
             self.cond.notify_all()
 
 
+def ipa_bundle_id(ipa_path):
+    with zipfile.ZipFile(ipa_path) as z:
+        plists = sorted((n for n in z.namelist() if n.startswith("Payload/") and n.endswith(".app/Info.plist")
+                         and n.count("/") == 2), key=len)
+        if not plists:
+            raise CertError("no Info.plist in IPA")
+        info = plistlib.loads(z.read(plists[0]))
+        return info.get("CFBundleIdentifier"), info.get("CFBundleDisplayName") or info.get("CFBundleName") or "App"
+
+
+class AppleIDStore:
+    """Stores signed-in Apple Developer accounts (session token + certificate + key)."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        root.mkdir(parents=True, exist_ok=True)
+
+    def _dir(self, aid_id):
+        d = (self.root / aid_id).resolve()
+        if d.parent != self.root.resolve():
+            raise CertError("bad id")
+        return d
+
+    def save(self, email, team, session, anisette, key, cert, device_id):
+        import uuid as _uuid
+        acc = "aid_" + _uuid.uuid4().hex[:10]
+        d = self._dir(acc)
+        d.mkdir()
+        (d / "session.json").write_text(json.dumps(session))
+        (d / "meta.json").write_text(json.dumps({"email": email, "team": team["teamId"],
+                                                 "teamName": team.get("name", ""), "anisette": anisette,
+                                                 "device_id": device_id}))
+        (d / "key.pem").write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                                                      serialization.PrivateFormat.PKCS8,
+                                                      serialization.NoEncryption()))
+        (d / "cert.der").write_bytes(cert.public_bytes(serialization.Encoding.DER))
+        return self.info(acc)
+
+    def info(self, acc):
+        d = self._dir(acc)
+        meta = json.loads((d / "meta.json").read_text())
+        from cryptography import x509
+        cert = x509.load_der_x509_certificate((d / "cert.der").read_bytes())
+        return {"id": acc, "kind": "appleid", "email": meta["email"], "team": meta["teamName"],
+                "teamId": meta["team"], "expires": cert.not_valid_after_utc.isoformat()}
+
+    def load(self, acc):
+        d = self._dir(acc)
+        from cryptography import x509
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key
+        meta = json.loads((d / "meta.json").read_text())
+        session = json.loads((d / "session.json").read_text())
+        key = load_pem_private_key((d / "key.pem").read_bytes(), None)
+        cert = x509.load_der_x509_certificate((d / "cert.der").read_bytes())
+        return meta, session, key, cert
+
+    def list(self):
+        out = []
+        for d in sorted(self.root.iterdir()) if self.root.exists() else []:
+            if (d / "meta.json").exists():
+                try:
+                    out.append(self.info(d.name))
+                except Exception:
+                    pass
+        return out
+
+    def remove(self, acc):
+        import shutil
+        shutil.rmtree(self._dir(acc))
+
+
 class App:
     def __init__(self, token: str):
         self.token = token
         self.certs = CertStore(CONFIG / "certs")
+        self.accounts = AppleIDStore(CONFIG / "appleid")
+        self.pending = {}  # in-memory half-finished logins
         self.jobs: dict[str, Job] = {}
         FILES.mkdir(parents=True, exist_ok=True)
 
@@ -123,6 +203,101 @@ class App:
         self.certs.remove(request.match_info["id"])
         return web.json_response({"ok": True})
 
+    # ---------- Apple ID ----------
+    async def appleid_list(self, request):
+        return web.json_response(await asyncio.to_thread(self.accounts.list))
+
+    async def appleid_delete(self, request):
+        self.accounts.remove(request.match_info["id"])
+        return web.json_response({"ok": True})
+
+    async def _first_udid(self):
+        try:
+            devs = await device.list_devices()
+            d = next((x for x in devs if x.get("paired")), None)
+            return d["udid"] if d else None
+        except Exception:
+            return None
+
+    async def appleid_login(self, request):
+        b = await request.json()
+        anisette = b.get("anisette") or "https://ani.sidestore.io"
+        device_id = str(uuid.uuid4()).upper()
+
+        def do_login():
+            an = aid.Anisette.fetch(anisette, device_id)
+            gs = aid.GSAuth(an, b["email"], b["password"])
+            factor = gs.login()
+            return an, gs, factor
+
+        try:
+            an, gs, factor = await asyncio.to_thread(do_login)
+        except aid.AppleIDError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        if factor:
+            pid = uuid.uuid4().hex[:12]
+            self.pending[pid] = {"an": an, "gs": gs, "anisette": anisette, "device_id": device_id}
+            await asyncio.to_thread(gs.request_code)
+            return web.json_response({"id": pid, "needs2FA": True, "factor": factor})
+        acc = await self._finish_login(an, gs, anisette, device_id)
+        return web.json_response(acc)
+
+    async def appleid_2fa(self, request):
+        b = await request.json()
+        p = self.pending.get(b["id"])
+        if not p:
+            return web.json_response({"error": "session expired"}, status=400)
+        try:
+            await asyncio.to_thread(p["gs"].submit_code, b["code"])
+        except aid.AppleIDError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        acc = await self._finish_login(p["an"], p["gs"], p["anisette"], p["device_id"])
+        self.pending.pop(b["id"], None)
+        return web.json_response(acc)
+
+    async def _finish_login(self, an, gs, anisette, device_id):
+        def work():
+            session = gs.xcode_token()
+            api = aid.DeveloperAPI(session, an)
+            teams = api.teams()
+            if not teams:
+                raise aid.AppleIDError("This Apple ID has no developer team")
+            team = teams[0]
+            key, cert = api.create_certificate(team["teamId"])
+            return session, team, key, cert
+
+        session, team, key, cert = await asyncio.to_thread(work)
+        udid = await self._first_udid()
+        if udid:
+            try:
+                await asyncio.to_thread(lambda: aid.DeveloperAPI(session, an).ensure_device(team["teamId"], udid))
+            except aid.AppleIDError:
+                pass
+        return await asyncio.to_thread(self.accounts.save, session["email"], team, session, anisette, key, cert, device_id)
+
+    async def _apple_identity(self, acc_id, ipa):
+        """Fetches a fresh provisioning profile for this IPA from the Apple account and
+        bundles a temporary .p12 the CLI can use. Returns (p12, profile, password, tmpdir)."""
+        bundle_id, name = await asyncio.to_thread(ipa_bundle_id, ipa)
+        if not bundle_id:
+            raise CertError("could not read the app's bundle ID")
+
+        def work():
+            meta, session, key, cert = self.accounts.load(acc_id)
+            if datetime.fromisoformat(session["expiry"]) < datetime.now(timezone.utc):
+                raise aid.AppleIDError("Apple ID session expired, sign in again")
+            an = aid.Anisette.fetch(meta["anisette"], meta["device_id"])
+            api = aid.DeveloperAPI(session, an)
+            prof = api.profile(meta["team"], bundle_id, name)
+            tmp = FILES / ("aid_" + uuid.uuid4().hex)
+            tmp.mkdir()
+            (tmp / "id.p12").write_bytes(aid.bundle_p12(key, cert, ""))
+            (tmp / "id.mobileprovision").write_bytes(prof)
+            return tmp
+
+        tmp = await asyncio.to_thread(work)
+        return tmp / "id.p12", tmp / "id.mobileprovision", "", tmp
+
     # ---------- devices ----------
     async def devices(self, request):
         try:
@@ -146,6 +321,7 @@ class App:
         return web.json_response({"id": job.id})
 
     async def _run(self, job: Job, b: dict):
+        apple_tmp = None
         try:
             ipa = self._file(b["ipa"])
             out = ipa.parent / (ipa.stem + "-signed.ipa")
@@ -153,7 +329,11 @@ class App:
                 cli = find_cli()
                 if not cli:
                     raise CertError("sayosign CLI not found. Build it with `make` or set SAYOSIGN_CLI.")
-                p12, prof, pw = self.certs.paths(b["cert"])
+                if str(b["cert"]).startswith("aid_"):
+                    await job.emit(stage="sign", percent=0, step="apple")
+                    p12, prof, pw, apple_tmp = await self._apple_identity(b["cert"], ipa)
+                else:
+                    p12, prof, pw = self.certs.paths(b["cert"])
                 o = b.get("options", {})
                 args = [cli, "sign", "-k", str(p12), "-p", pw, "-m", str(prof), "-i", str(ipa), "-o", str(out)]
                 for flag, key in (("-n", "name"), ("-b", "bundleId"), ("-v", "build"), ("-s", "version"), ("-c", "icon")):
@@ -209,6 +389,8 @@ class App:
         except Exception as e:
             await job.emit(stage="error", error=str(e) or type(e).__name__)
         finally:
+            if apple_tmp:
+                shutil.rmtree(apple_tmp, ignore_errors=True)
             job.done = True
             async with job.cond:
                 job.cond.notify_all()
@@ -255,6 +437,10 @@ class App:
         r.add_post("/api/certs", self.certs_add)
         r.add_post("/api/certs/{id}/check", self.certs_check)
         r.add_delete("/api/certs/{id}", self.certs_delete)
+        r.add_get("/api/appleid", self.appleid_list)
+        r.add_post("/api/appleid/login", self.appleid_login)
+        r.add_post("/api/appleid/2fa", self.appleid_2fa)
+        r.add_delete("/api/appleid/{id}", self.appleid_delete)
         r.add_get("/api/devices", self.devices)
         r.add_get("/api/devices/{udid}/apps", self.apps)
         r.add_delete("/api/devices/{udid}/apps/{bundle}", self.uninstall)

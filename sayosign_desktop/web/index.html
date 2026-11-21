@@ -95,9 +95,34 @@
         <p class="muted small" data-t="pwHint"></p>
         <button class="primary" id="cert-save" data-t="add"></button>
         <p id="cert-msg" class="msg"></p>
+        <div class="appleid-cta">
+          <span class="or" data-t="orWord"></span>
+          <button class="secondary" id="appleid-btn"> <span data-t="appleidSignin"></span></button>
+        </div>
       </div>
       <div id="cert-list" class="cert-list"></div>
     </section>
+
+    <dialog id="appleid-dialog">
+      <form id="appleid-form" method="dialog">
+        <h3 data-t="appleidTitle"></h3>
+        <div id="appleid-step1">
+          <p class="muted small" data-t="appleidHint"></p>
+          <label class="field"><span>Apple ID</span><input id="aid-email" type="email" autocomplete="off"></label>
+          <label class="field"><span data-t="password"></span><input id="aid-pass" type="password" autocomplete="off"></label>
+          <label class="field"><span data-t="anisette"></span><input id="aid-anisette" value="https://ani.sidestore.io" spellcheck="false"></label>
+        </div>
+        <div id="appleid-step2" hidden>
+          <p class="muted small" data-t="appleid2fa"></p>
+          <label class="field"><span data-t="code"></span><input id="aid-code" inputmode="numeric" autocomplete="off"></label>
+        </div>
+        <p id="aid-msg" class="msg"></p>
+        <menu>
+          <button value="cancel" data-t="cancel"></button>
+          <button value="ok" class="primary" id="aid-submit" data-t="continue"></button>
+        </menu>
+      </form>
+    </dialog>
 
     <!-- DEVICE -->
     <section id="view-device" class="view">
