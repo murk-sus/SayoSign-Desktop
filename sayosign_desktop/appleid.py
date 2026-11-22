@@ -72,8 +72,10 @@ class _SRP:
         S = pow(base, self.a + u * x, _N)
         self.K = _h(_i2b(S, 256).lstrip(b"\x00"))
         hn = int.from_bytes(_h(_i2b(_N, 256)), "big") ^ int.from_bytes(_h(_i2b(_G, 256)), "big")  # g padded (RFC 5054)
-        self.M1 = _h(_i2b(hn, 32), _h(username.encode()), salt, self.Ab, _i2b(Bn, 256), self.K)
-        self.M2 = _h(self.Ab, self.M1, self.K)
+        # A and B go into M1/M2 without leading zero bytes (unlike u, which pads them)
+        a_min, b_min = self.Ab.lstrip(b"\x00"), _i2b(Bn, 256).lstrip(b"\x00")
+        self.M1 = _h(_i2b(hn, 32), _h(username.encode()), salt, a_min, b_min, self.K)
+        self.M2 = _h(a_min, self.M1, self.K)
 
 
 # Human-readable messages for common GrandSlam error codes.
@@ -161,16 +163,26 @@ class Session:
             raise err
         return out
 
-    def request(self, url, method, extra, json_body=False, data=None, where="two-factor"):
+    def request(self, url, method, extra, json_body=False, data=None, where="two-factor", parse=True):
         h = {**self.an.base_headers(json_body), **self.an.headers(), **extra}
         req = urllib.request.Request(url, data=data, method=method, headers=h)
-        return _read(req, where, timeout=30)
+        if parse:
+            return _read(req, where, timeout=30)
+        # Some 2FA endpoints answer with an HTML page; only the status matters there.
+        try:
+            with urllib.request.urlopen(req, context=apple_ssl(), timeout=30) as r:
+                r.read()
+                return r.status, {}
+        except urllib.error.HTTPError as e:
+            return e.code, {}
 
 
 class GSAuth:
     def __init__(self, session: Session, email, password):
         self.s = session
-        self.email = email
+        # Apple's SRP hashes the account name as stored, which is lower case:
+        # "Name@gmail.com" gets -22406 (wrong password) even with the right password.
+        self.email = email.strip().lower()
         self.password = password
         self.second = None
 
@@ -194,7 +206,7 @@ class GSAuth:
         key = _hmac(srp.K, b"extra data key:")
         iv = _hmac(srp.K, b"extra data iv:")[:16]
         try:
-            sd = plistlib.loads(_cbc_decrypt(key, iv, spd))
+            sd = _loads_plist(_cbc_decrypt(key, iv, spd))
         except Exception:
             raise AppleIDError("Could not read Apple's session data. Try signing in again.")
         self.session = {"adsid": sd["adsid"], "idms": sd["GsIdmsToken"], "sk": sd["sk"], "c": sd["c"]}
@@ -216,9 +228,11 @@ class GSAuth:
 
     def request_code(self):
         if self.second == "trusted":
-            self.s.request(self.s.url("trustedDeviceSecondaryAuth"), "GET", self._identity())
+            status, _ = self.s.request(self.s.url("trustedDeviceSecondaryAuth"), "GET", self._identity(), parse=False)
+            if status >= 400:
+                raise AppleIDError(f"Apple could not send the code to your devices (HTTP {status})")
         else:
-            self.s.request("https://gsa.apple.com/auth", "GET", self._identity(), json_body=True)
+            self.s.request("https://gsa.apple.com/auth", "GET", self._identity(), json_body=True, parse=False)
             status, _ = self.s.request("https://gsa.apple.com/auth/verify/phone", "PUT", self._identity(), json_body=True,
                                        data=json.dumps({"phoneNumber": {"id": 1}, "mode": "sms"}).encode())
             if status >= 400:
@@ -253,7 +267,7 @@ class GSAuth:
         if not et:
             raise AppleIDError("Apple did not return an app token")
         try:
-            p = plistlib.loads(_gcm_decrypt(s["sk"], et))
+            p = _loads_plist(_gcm_decrypt(s["sk"], et))
         except Exception:
             raise AppleIDError("Could not read the Xcode token from Apple. Try signing in again.")
         x = p["t"][APP]
@@ -264,6 +278,14 @@ class GSAuth:
 def _hmac(key, msg):
     import hmac
     return hmac.new(key, msg, hashlib.sha256).digest()
+
+
+def _loads_plist(data):
+    """Apple's session data is a bare <dict>...</dict> without the XML/plist wrapper."""
+    body = data.strip()
+    if body.startswith(b"<dict") or body.startswith(b"<array"):
+        body = (b'<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0">' + body + b"</plist>")
+    return plistlib.loads(body)
 
 
 def _cbc_decrypt(key, iv, data):

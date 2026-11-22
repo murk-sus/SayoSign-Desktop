@@ -12,6 +12,7 @@ import json
 import os
 import plistlib
 import ssl
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timezone
@@ -42,6 +43,17 @@ def apple_ssl():
     if APPLE_ROOT.exists():
         ctx.load_verify_locations(str(APPLE_ROOT))
     return ctx
+
+
+def system_proxy(url):
+    """The system HTTPS/HTTP proxy for url, or None. aiohttp only looks up WSS_PROXY for
+    wss:// URLs, so the WebSocket would bypass the HTTPS_PROXY that urllib uses."""
+    host = urllib.parse.urlsplit(url).hostname or ""
+    if urllib.request.proxy_bypass(host):
+        return None
+    proxies = urllib.request.getproxies()
+    scheme = urllib.parse.urlsplit(url).scheme
+    return proxies.get(scheme) or proxies.get("https" if scheme in ("https", "wss") else "http")
 
 
 def _http_json(url, data=None, timeout=20):
@@ -142,8 +154,9 @@ class Anisette:
         bag = await asyncio.to_thread(self.url_bag)
         start, finish = bag["midStartProvisioning"], bag["midFinishProvisioning"]
         ws_url = self.server.replace("https://", "wss://").replace("http://", "ws://") + "/v3/provisioning_session"
-        async with aiohttp.ClientSession() as s:
-            async with s.ws_connect(ws_url, timeout=aiohttp.ClientWSTimeout(ws_close=10), heartbeat=20) as ws:
+        async with aiohttp.ClientSession(trust_env=True) as s:
+            async with s.ws_connect(ws_url, timeout=aiohttp.ClientWSTimeout(ws_close=10), heartbeat=20,
+                                    proxy=system_proxy(self.server)) as ws:
                 async for msg in ws:
                     if msg.type != aiohttp.WSMsgType.TEXT:
                         break
