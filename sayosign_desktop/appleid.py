@@ -4,6 +4,7 @@ GrandSlam (SRP-6a, byte-for-byte verified against the C engine) on top of the an
 v3 client in anisette.py. Endpoints come from Apple's URL bag; every request carries the
 client info of the anisette server, which Apple requires since October 2026.
 """
+import gzip
 import hashlib
 import json
 import plistlib
@@ -104,6 +105,8 @@ def _gsa_error(status):
 
 def _parse(data, status, where):
     """Apple answers with a plist, JSON, or nothing at all depending on the endpoint."""
+    if data[:2] == b"\x1f\x8b":  # developer services gzip the body even without Accept-Encoding
+        data = gzip.decompress(data)
     if not data or not data.strip():
         return {}
     try:
