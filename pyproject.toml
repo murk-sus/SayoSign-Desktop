@@ -9,7 +9,7 @@ description = "Sign and install IPA files on your iPhone from Linux, Windows or 
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.10"
-dependencies = ["aiohttp>=3.9", "cryptography>=42", "pymobiledevice3>=4"]
+dependencies = ["aiohttp>=3.9", "cryptography>=42", "pymobiledevice3>=4", "pywebview>=5"]
 
 [project.optional-dependencies]
 window = ["pywebview>=5"]

@@ -3,6 +3,7 @@ import argparse
 import asyncio
 import secrets
 import socket
+import sys
 import threading
 import webbrowser
 
@@ -38,7 +39,7 @@ def main():
             asyncio.run(_serve(app, port))
         threading.Thread(target=serve, daemon=True).start()
         webview.create_window("SayoSign", url, width=1180, height=820, min_size=(420, 600))
-        webview.start()
+        webview.start(gui="gtk" if sys.platform.startswith("linux") else None)
         return
 
     print(f"SayoSign Desktop is running at {url}")
