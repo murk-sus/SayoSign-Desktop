@@ -87,6 +87,8 @@ GSA_ERRORS = {
     -45061: "Anisette is not provisioned for this server. Reset anisette and try again",
     -22410: "Too many attempts. Wait a few minutes and try again",
     -22411: "Apple is limiting sign-ins right now. Try again later",
+    -22421: "The two-factor code is wrong or expired",
+    -21669: "The two-factor code is wrong or expired",
 }
 
 
