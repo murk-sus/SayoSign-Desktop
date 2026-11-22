@@ -49,7 +49,8 @@ FILES = CACHE / "files"
 
 def find_cli() -> str | None:
     exe = "sayosign.exe" if sys.platform == "win32" else "sayosign"
-    for c in [os.environ.get("SAYOSIGN_CLI"), HERE / "bin" / exe, HERE.parent.parent / "build" / exe, shutil.which(exe)]:
+    for c in [os.environ.get("SAYOSIGN_CLI"), HERE / "bin" / exe, HERE.parent / "engine" / "build" / exe,
+              HERE.parent.parent / "build" / exe, shutil.which(exe)]:
         if c and Path(c).is_file():
             return str(c)
     return None
@@ -403,7 +404,7 @@ class App:
             if b.get("cert"):
                 cli = find_cli()
                 if not cli:
-                    raise CertError("sayosign CLI not found. Build it with `make` or set SAYOSIGN_CLI.")
+                    raise CertError("The signing engine was not found. Run ./install-linux.sh or `make -C engine`.")
                 if str(b["cert"]).startswith("aid_"):
                     await job.emit(stage="sign", percent=0, step="apple")
                     p12, prof, pw, apple_tmp = await self._apple_identity(b["cert"], ipa)

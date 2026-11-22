@@ -1,0 +1,119 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: linux-x64
+          - os: macos-latest
+            name: macos-arm64
+          - os: windows-latest
+            name: windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Engine deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y liblzma-dev libssl-dev zlib1g-dev
+
+      - name: Engine deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install openssl@3 xz
+
+      - name: MSYS2 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          install: make mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-openssl mingw-w64-ucrt-x86_64-zlib mingw-w64-ucrt-x86_64-xz
+
+      - name: Build engine (Linux)
+        if: runner.os == 'Linux'
+        run: make -C engine -j4 && (cd engine && ./tests/run.sh)
+
+      - name: Build engine (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          P=$(brew --prefix openssl@3); X=$(brew --prefix xz)
+          make -C engine -j4 CFLAGS="-O2 -I$P/include -I$X/include" LDFLAGS="-L$P/lib -L$X/lib" \
+            CC="cc -L$P/lib -L$X/lib"
+
+      - name: Build engine (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          make -C engine -j4 CC=gcc
+          cd engine
+          [ -f build/sayosign.exe ] || mv build/sayosign build/sayosign.exe
+          ldd build/sayosign.exe | grep -i ucrt64 | awk '{print $3}' | xargs -I{} cp {} build/
+          ls -la build
+
+      - name: Collect engine
+        shell: bash
+        run: |
+          mkdir -p sayosign_desktop/bin
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp engine/build/sayosign.exe engine/build/*.dll sayosign_desktop/bin/
+          else
+            cp engine/build/sayosign sayosign_desktop/bin/
+          fi
+          ls -la sayosign_desktop/bin
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Bundle app
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . pyinstaller
+          python -m PyInstaller --noconfirm --name SayoSign --windowed \
+            --collect-all pymobiledevice3 --collect-submodules sayosign_desktop \
+            --collect-all qrcode \
+            --add-data "sayosign_desktop/web:sayosign_desktop/web" \
+            --add-data "sayosign_desktop/apple_root.pem:sayosign_desktop" \
+            --add-binary "sayosign_desktop/bin/*:sayosign_desktop/bin" \
+            --icon sayosign_desktop/web/icon.png \
+            sayosign_desktop/launcher.py
+
+      - name: Package
+        shell: bash
+        working-directory: dist
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            ditto -c -k --keepParent SayoSign.app ../SayoSign-Desktop-${{ matrix.name }}.zip
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            7z a ../SayoSign-Desktop-${{ matrix.name }}.zip SayoSign
+          else
+            tar czf ../SayoSign-Desktop-${{ matrix.name }}.tar.gz SayoSign
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SayoSign-Desktop-${{ matrix.name }}
+          path: SayoSign-Desktop-*
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: SayoSign-Desktop-*
+          name: SayoSign Desktop ${{ github.ref_name }} (beta)
+          prerelease: true

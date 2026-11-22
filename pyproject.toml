@@ -4,15 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sayosign-desktop"
-version = "0.1.0"
+version = "0.2.0"
 description = "Sign and install IPA files on your iPhone from Linux, Windows or macOS"
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.10"
-dependencies = ["aiohttp>=3.9", "cryptography>=42", "pymobiledevice3>=4", "pywebview>=5"]
+dependencies = ["aiohttp>=3.9", "cryptography>=42", "pymobiledevice3>=4", "pywebview>=5", "qrcode>=7"]
 
-[project.optional-dependencies]
-window = ["pywebview>=5"]
+[project.urls]
+Homepage = "https://github.com/murk-sus/SayoSign-Desktop"
+"iOS app" = "https://github.com/murk-sus/SayoSign"
 
 [project.scripts]
 sayosign-desktop = "sayosign_desktop.__main__:main"
@@ -21,4 +22,4 @@ sayosign-desktop = "sayosign_desktop.__main__:main"
 include = ["sayosign_desktop*"]
 
 [tool.setuptools.package-data]
-sayosign_desktop = ["web/*", "web/lens/*", "bin/*"]
+sayosign_desktop = ["web/*", "web/lens/*", "bin/*", "apple_root.pem"]
