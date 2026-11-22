@@ -214,7 +214,7 @@ function renderIpa() {
   const icon = r.icon ? URL.createObjectURL(new Blob([r.icon], { type: "image/png" })) : "";
   card.innerHTML = `
     <div class="app-head">
-      ${icon ? `<img src="${icon}" alt="">` : `<div class="ph">📦</div>`}
+      ${icon ? `<img src="${icon}" alt="">` : `<div class="ph"><svg class="i" viewBox="0 0 24 24"><path d="M3.5 7.5l8.5-4 8.5 4v9l-8.5 4-8.5-4z"/><path d="M3.5 7.5l8.5 4 8.5-4M12 11.5V20"/></svg></div>`}
       <div>
         <h2>${esc(r.name)}</h2>
         <div class="mono muted">${esc(r.bundleId)}</div>
@@ -406,7 +406,7 @@ function renderDevices() {
     : `<option value="">${t("pickDevice")}</option>`;
   if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
   $("#device-info").innerHTML = st.devices.length
-    ? st.devices.map((d) => `<div class="card dev-card"><div class="dev-ico">📱</div><div><h3 style="margin:0">${esc(d.name || "iPhone")}</h3>
+    ? st.devices.map((d) => `<div class="card dev-card"><div class="dev-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><line x1="11" y1="18.5" x2="13" y2="18.5"/></svg></div><div><h3 style="margin:0">${esc(d.name || "iPhone")}</h3>
         <div class="muted">${esc(d.model || "")} · iOS ${esc(d.ios || "?")} (${esc(d.build || "")}) · ${esc(d.connection)}</div>
         <div class="mono muted small">${esc(d.udid)}</div>${d.error ? `<p class="note bad">${esc(d.error)}</p>` : ""}</div></div>`).join("")
     : `<div class="card empty">${t("noDevice")}</div>`;
