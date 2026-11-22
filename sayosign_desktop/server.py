@@ -44,6 +44,20 @@ def _data_dirs():
 
 
 CONFIG, CACHE = _data_dirs()
+LOG = CACHE / "desktop.log"
+
+
+def log_error(where, exc):
+    """Appends a traceback to desktop.log so problems can be diagnosed after the fact."""
+    import traceback
+    from datetime import datetime as _dt
+    try:
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(LOG, "a") as f:
+            f.write(f"\n[{_dt.now().isoformat(timespec='seconds')}] {where}: {type(exc).__name__}: {exc}\n")
+            f.write("".join(traceback.format_exception(exc)))
+    except OSError:
+        pass
 FILES = CACHE / "files"
 
 
@@ -166,6 +180,7 @@ class App:
         except web.HTTPException:
             raise
         except Exception as e:
+            log_error(request.path, e)
             return web.json_response({"error": str(e) or type(e).__name__}, status=500)
 
     # ---------- files ----------
@@ -301,8 +316,9 @@ class App:
 
         try:
             sess, gs, factor = await asyncio.to_thread(do_login)
-        except (aid.AppleIDError, AnisetteError) as e:
-            return web.json_response({"error": str(e)}, status=400)
+        except Exception as e:
+            log_error("appleid/login", e)
+            return web.json_response({"error": str(e) or type(e).__name__}, status=400)
         if factor:
             pid = uuid.uuid4().hex[:12]
             self.pending[pid] = {"sess": sess, "gs": gs, "server": server}
@@ -313,8 +329,9 @@ class App:
             return web.json_response({"id": pid, "needs2FA": True, "factor": factor})
         try:
             acc = await self._finish_login(sess, gs, server)
-        except (aid.AppleIDError, AnisetteError) as e:
-            return web.json_response({"error": str(e)}, status=400)
+        except Exception as e:
+            log_error("appleid/finish", e)
+            return web.json_response({"error": str(e) or type(e).__name__}, status=400)
         return web.json_response(acc)
 
     async def appleid_2fa(self, request):
@@ -325,8 +342,9 @@ class App:
         try:
             await asyncio.to_thread(p["gs"].submit_code, b["code"].strip())
             acc = await self._finish_login(p["sess"], p["gs"], p["server"])
-        except (aid.AppleIDError, AnisetteError) as e:
-            return web.json_response({"error": str(e)}, status=400)
+        except Exception as e:
+            log_error("appleid/2fa", e)
+            return web.json_response({"error": str(e) or type(e).__name__}, status=400)
         self.pending.pop(b["id"], None)
         return web.json_response(acc)
 

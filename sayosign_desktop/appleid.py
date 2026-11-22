@@ -100,6 +100,31 @@ def _gsa_error(status):
     return AppleIDError(f"{msg} ({ec})")
 
 
+def _parse(data, status, where):
+    """Apple answers with a plist, JSON, or nothing at all depending on the endpoint."""
+    if not data or not data.strip():
+        return {}
+    try:
+        return plistlib.loads(data)
+    except Exception:
+        pass
+    try:
+        out = json.loads(data)
+        return out if isinstance(out, dict) else {"value": out}
+    except Exception:
+        snippet = data[:160].decode("utf-8", "replace").strip().replace("\n", " ")
+        raise AppleIDError(f"Apple sent an unexpected response at {where} (HTTP {status}): {snippet}")
+
+
+def _read(req, where, timeout=40):
+    """Performs a request and parses the body, including bodies of HTTP errors."""
+    try:
+        with urllib.request.urlopen(req, context=apple_ssl(), timeout=timeout) as r:
+            return r.status, _parse(r.read(), r.status, where)
+    except urllib.error.HTTPError as e:
+        return e.code, _parse(e.read(), e.code, where)
+
+
 class Session:
     """Anisette + Apple's URL bag, shared by every request in one sign-in."""
 
@@ -126,24 +151,20 @@ class Session:
         body = plistlib.dumps({"Header": {"Version": "1.0.1"}, "Request": request})
         req = urllib.request.Request(self.url("gsService"), data=body, method="POST",
                                      headers={**self.an.base_headers(), "Connection": "close"})
-        try:
-            with urllib.request.urlopen(req, context=apple_ssl(), timeout=30) as r:
-                resp = plistlib.loads(r.read())
-        except urllib.error.HTTPError as e:
-            if e.code in (500, 503):
-                raise AppleIDError(f"Apple answered {e.code}. This usually means the anisette data was rejected; "
-                                   "switch to a Mac-based anisette server and reset anisette.")
-            raise
+        status, resp = _read(req, "sign-in", timeout=30)
+        if status in (500, 503):
+            raise AppleIDError(f"Apple answered {status}. This usually means the anisette data was rejected; "
+                               "switch to a Mac-based anisette server and reset anisette.")
         out = resp.get("Response", resp)
         err = _gsa_error(out.get("Status", {}))
         if err:
             raise err
         return out
 
-    def request(self, url, method, extra, json_body=False, data=None):
+    def request(self, url, method, extra, json_body=False, data=None, where="two-factor"):
         h = {**self.an.base_headers(json_body), **self.an.headers(), **extra}
         req = urllib.request.Request(url, data=data, method=method, headers=h)
-        return urllib.request.urlopen(req, context=apple_ssl(), timeout=30)
+        return _read(req, where, timeout=30)
 
 
 class GSAuth:
@@ -172,7 +193,10 @@ class GSAuth:
             raise AppleIDError("Wrong Apple ID or password")
         key = _hmac(srp.K, b"extra data key:")
         iv = _hmac(srp.K, b"extra data iv:")[:16]
-        sd = plistlib.loads(_cbc_decrypt(key, iv, spd))
+        try:
+            sd = plistlib.loads(_cbc_decrypt(key, iv, spd))
+        except Exception:
+            raise AppleIDError("Could not read Apple's session data. Try signing in again.")
         self.session = {"adsid": sd["adsid"], "idms": sd["GsIdmsToken"], "sk": sd["sk"], "c": sd["c"]}
         status = comp.get("Status", {})
         au = status.get("au")
@@ -192,26 +216,29 @@ class GSAuth:
 
     def request_code(self):
         if self.second == "trusted":
-            self.s.request(self.s.url("trustedDeviceSecondaryAuth"), "GET", self._identity()).close()
+            self.s.request(self.s.url("trustedDeviceSecondaryAuth"), "GET", self._identity())
         else:
-            self.s.request("https://gsa.apple.com/auth", "GET", self._identity(), json_body=True).close()
-            self.s.request("https://gsa.apple.com/auth/verify/phone", "PUT", self._identity(), json_body=True,
-                           data=json.dumps({"phoneNumber": {"id": 1}, "mode": "sms"}).encode()).close()
+            self.s.request("https://gsa.apple.com/auth", "GET", self._identity(), json_body=True)
+            status, _ = self.s.request("https://gsa.apple.com/auth/verify/phone", "PUT", self._identity(), json_body=True,
+                                       data=json.dumps({"phoneNumber": {"id": 1}, "mode": "sms"}).encode())
+            if status >= 400:
+                raise AppleIDError(f"Apple could not send the SMS code (HTTP {status})")
 
     def submit_code(self, code):
         if self.second == "trusted":
-            r = self.s.request(self.s.url("validateCode"), "GET", {**self._identity(), "security-code": code})
-            p = plistlib.loads(r.read())
-            err = _gsa_error(p.get("Status", p))
+            status, p = self.s.request(self.s.url("validateCode"), "GET", {**self._identity(), "security-code": code})
+            st = p.get("Status", p) if isinstance(p, dict) else {}
+            err = _gsa_error(st)
             if err:
-                raise AppleIDError("Wrong code" if p.get("Status", p).get("ec") in (-21669,) else str(err))
+                raise err
+            if status >= 400:
+                raise AppleIDError(f"The two-factor code is wrong or expired (HTTP {status})")
         else:
-            try:
-                self.s.request("https://gsa.apple.com/auth/verify/phone/securitycode", "POST", self._identity(),
-                               json_body=True, data=json.dumps({"phoneNumber": {"id": 1},
-                                                                "securityCode": {"code": code}, "mode": "sms"}).encode()).close()
-            except urllib.error.HTTPError:
-                raise AppleIDError("Wrong code")
+            status, _ = self.s.request("https://gsa.apple.com/auth/verify/phone/securitycode", "POST", self._identity(),
+                                       json_body=True, data=json.dumps({"phoneNumber": {"id": 1},
+                                                                        "securityCode": {"code": code}, "mode": "sms"}).encode())
+            if status >= 400:
+                raise AppleIDError(f"The two-factor code is wrong or expired (HTTP {status})")
         # The trusted session only exists after logging in again.
         self.login()
         if self.second:
@@ -225,7 +252,10 @@ class GSAuth:
         et = resp.get("et")
         if not et:
             raise AppleIDError("Apple did not return an app token")
-        p = plistlib.loads(_gcm_decrypt(s["sk"], et))
+        try:
+            p = plistlib.loads(_gcm_decrypt(s["sk"], et))
+        except Exception:
+            raise AppleIDError("Could not read the Xcode token from Apple. Try signing in again.")
         x = p["t"][APP]
         exp = datetime.fromtimestamp(x["expiry"] / 1000, timezone.utc) if x.get("expiry") else datetime.now(timezone.utc) + timedelta(days=7)
         return {"adsid": s["adsid"], "idms": s["idms"], "token": x["token"], "expiry": exp.isoformat(), "email": self.email}
@@ -243,9 +273,10 @@ def _cbc_decrypt(key, iv, data):
 
 
 def _gcm_decrypt(key, blob):
-    # blob = b"XYZ" + version(1) + iv(16) + ciphertext + tag(16)
+    # blob = b"XYZ" + iv(16) + ciphertext + tag(16); the 3-byte header is authenticated data
     iv, ct, tag = blob[3:3 + 16], blob[3 + 16:-16], blob[-16:]
     c = Cipher(algorithms.AES(key), modes.GCM(iv, tag)).decryptor()
+    c.authenticate_additional_data(blob[:3])
     return c.update(ct) + c.finalize()
 
 
@@ -261,8 +292,9 @@ class DeveloperAPI:
         h = {**self.gs.an.base_headers(), **self.gs.an.headers(), "Accept-Language": "en-us",
              "X-Apple-I-Identity-Id": self.s["adsid"], "X-Apple-GS-Token": self.s["token"]}
         req = urllib.request.Request(f"{DEV}/{path}?clientId={CLIENT_ID}", data=plistlib.dumps(body), method="POST", headers=h)
-        with urllib.request.urlopen(req, context=apple_ssl(), timeout=40) as r:
-            p = plistlib.loads(r.read())
+        status, p = _read(req, f"developer services ({action})")
+        if status in (401, 403) and not p.get("resultCode"):
+            raise AppleIDError(f"Apple developer services refused the session (HTTP {status}). Sign in again.")
         if p.get("resultCode", 0):
             raise AppleIDError(p.get("userString") or p.get("resultString") or f"error {p['resultCode']}")
         return p
