@@ -71,7 +71,7 @@ class _SRP:
         base = (Bn - k * v) % _N
         S = pow(base, self.a + u * x, _N)
         self.K = _h(_i2b(S, 256).lstrip(b"\x00"))
-        hn = int.from_bytes(_h(_i2b(_N, 256)), "big") ^ int.from_bytes(_h(bytes([_G])), "big")
+        hn = int.from_bytes(_h(_i2b(_N, 256)), "big") ^ int.from_bytes(_h(_i2b(_G, 256)), "big")  # g padded (RFC 5054)
         self.M1 = _h(_i2b(hn, 32), _h(username.encode()), salt, self.Ab, _i2b(Bn, 256), self.K)
         self.M2 = _h(self.Ab, self.M1, self.K)
 
