@@ -29,8 +29,17 @@ const S = {
     added: "Certificate added", removeConfirm: "Delete this certificate?", uninstall: "Delete",
     uninstallConfirm: "Delete {name} from your iPhone?", deleted: "Deleted", daysLeft: "{n} days left", expired: "expired",
     cliMissing: "The signing engine was not found. Run `make` in the SayoSign folder.",
+    navAnisette: "Anisette", themeSystem: "Auto", themeLight: "Light", themeBlack: "Black", change: "change",
+    anisetteTitle: "Anisette", anisetteSub: "Apple ID sign-in needs anisette. Since October 2026 Apple only accepts Mac-based servers.",
+    aniQuick: "Quick setup", aniQuickHint: "Tests the public Mac servers right now, provisions this PC and picks the fastest one that Apple accepts.",
+    aniAutoBtn: "Set up automatically", aniServer: "Server", aniOwn: "Your own server", aniUse: "Use", aniCheck: "Check", aniReset: "Reset identity",
+    aniData: "Server data", aniLocal: "Anisette server on this PC", aniLocalHint: "Your iPhone uses this computer as its anisette server. Scan the QR code with the iPhone camera, it opens SayoSign and sets the server. Keep the phone on the same Wi-Fi.",
+    aniProtocol: "Protocol", aniClient: "Client info", aniUA: "User agent", aniDevice: "Device ID", aniMachine: "Machine ID", aniOk: "Working", aniFail: "Not working",
+    aniMac: "Mac-based, Apple accepts it", aniLegacy: "Legacy client, Apple rejects it", aniNonMac: "Not Mac-based, Apple may reject it",
+    aniAddresses: "Addresses", aniUpstream: "Upstream", aniRequests: "Requests served", aniChecking: "Checking…", aniResetDone: "Anisette identity reset",
+    aniSaved: "Server saved", aniPicked: "Picked {name} ({ms} ms)", aniNone: "No public server works right now. Try again later or use your own Mac server.", aniCurrent: "current",
     orWord: "or", appleidSignin: "🍎 Sign in with Apple ID", appleidTitle: "Sign in with Apple ID",
-    appleidHint: "Use a free or paid developer account — ideally a spare one. A certificate and profile are created for you. Needs a working anisette server (self-hosted or Mac-backed works best; Apple blocks some public ones).",
+    appleidHint: "Use a free or paid developer account. A certificate and profile are created for you. Needs an anisette server.",
     anisette: "Anisette server", appleid2fa: "Apple sent a code to your trusted devices. Enter it below.", code: "Code",
     continue: "Continue", appleidDone: "Signed in 🎀", appleidKind: "Apple ID",
     deviceNotInProfile: "Warning: this iPhone is not in the certificate's profile, the app will not open.",
@@ -62,8 +71,17 @@ const S = {
     added: "Сертификат добавлен", removeConfirm: "Удалить этот сертификат?", uninstall: "Удалить",
     uninstallConfirm: "Удалить {name} с айфона?", deleted: "Удалено", daysLeft: "осталось {n} дн.", expired: "истёк",
     cliMissing: "Движок подписи не найден. Выполни `make` в папке SayoSign.",
+    navAnisette: "Anisette", themeSystem: "Авто", themeLight: "Светлая", themeBlack: "Чёрная", change: "изменить",
+    anisetteTitle: "Anisette", anisetteSub: "Для входа через Apple ID нужен anisette. С октября 2026 Apple принимает только серверы на Mac.",
+    aniQuick: "Быстрая настройка", aniQuickHint: "Прямо сейчас проверяет публичные Mac-серверы, активирует этот ПК и выбирает самый быстрый из тех, что принимает Apple.",
+    aniAutoBtn: "Настроить автоматически", aniServer: "Сервер", aniOwn: "Свой сервер", aniUse: "Использовать", aniCheck: "Проверить", aniReset: "Сбросить идентичность",
+    aniData: "Данные сервера", aniLocal: "Anisette-сервер на этом ПК", aniLocalHint: "Айфон будет использовать этот компьютер как anisette-сервер. Отсканируй QR камерой айфона — откроется SayoSign и сервер установится сам. Телефон должен быть в той же Wi-Fi сети.",
+    aniProtocol: "Протокол", aniClient: "Client info", aniUA: "User agent", aniDevice: "ID устройства", aniMachine: "ID машины", aniOk: "Работает", aniFail: "Не работает",
+    aniMac: "Mac-сервер, Apple принимает", aniLegacy: "Устаревший клиент, Apple отклоняет", aniNonMac: "Не Mac, Apple может отклонить",
+    aniAddresses: "Адреса", aniUpstream: "Источник", aniRequests: "Обслужено запросов", aniChecking: "Проверяю…", aniResetDone: "Идентичность anisette сброшена",
+    aniSaved: "Сервер сохранён", aniPicked: "Выбран {name} ({ms} мс)", aniNone: "Сейчас не работает ни один публичный сервер. Попробуй позже или укажи свой Mac-сервер.", aniCurrent: "текущий",
     orWord: "или", appleidSignin: "🍎 Войти через Apple ID", appleidTitle: "Вход через Apple ID",
-    appleidHint: "Бесплатный или платный аккаунт разработчика, лучше запасной. Сертификат и профиль создаются автоматически. Нужен рабочий anisette-сервер (свой или на базе Mac надёжнее; часть публичных Apple блокирует).",
+    appleidHint: "Бесплатный или платный аккаунт разработчика. Сертификат и профиль создаются автоматически. Нужен anisette-сервер.",
     anisette: "Anisette-сервер", appleid2fa: "Apple отправил код на доверенные устройства. Введи его ниже.", code: "Код",
     continue: "Продолжить", appleidDone: "Вход выполнен 🎀", appleidKind: "Apple ID",
     deviceNotInProfile: "Внимание: этого айфона нет в профиле сертификата, приложение не откроется.",
@@ -95,8 +113,17 @@ const S = {
     added: "证书已添加", removeConfirm: "删除此证书？", uninstall: "删除",
     uninstallConfirm: "从 iPhone 删除 {name}？", deleted: "已删除", daysLeft: "剩余 {n} 天", expired: "已过期",
     cliMissing: "未找到签名引擎。请在 SayoSign 目录中运行 `make`。",
+    navAnisette: "Anisette", themeSystem: "自动", themeLight: "浅色", themeBlack: "黑色", change: "更改",
+    anisetteTitle: "Anisette", anisetteSub: "Apple ID 登录需要 Anisette。自 2026 年 10 月起，Apple 只接受基于 Mac 的服务器。",
+    aniQuick: "快速设置", aniQuickHint: "立即测试公共 Mac 服务器，为这台电脑配置，并选择 Apple 接受的最快服务器。",
+    aniAutoBtn: "自动设置", aniServer: "服务器", aniOwn: "你自己的服务器", aniUse: "使用", aniCheck: "检查", aniReset: "重置身份",
+    aniData: "服务器数据", aniLocal: "本机 Anisette 服务器", aniLocalHint: "iPhone 将把这台电脑用作 Anisette 服务器。用 iPhone 相机扫描二维码，会打开 SayoSign 并自动设置服务器。手机需连接同一 Wi-Fi。",
+    aniProtocol: "协议", aniClient: "Client info", aniUA: "User agent", aniDevice: "设备 ID", aniMachine: "机器 ID", aniOk: "正常", aniFail: "不可用",
+    aniMac: "基于 Mac，Apple 接受", aniLegacy: "旧版客户端，Apple 会拒绝", aniNonMac: "非 Mac，Apple 可能拒绝",
+    aniAddresses: "地址", aniUpstream: "上游", aniRequests: "已处理请求", aniChecking: "检查中…", aniResetDone: "Anisette 身份已重置",
+    aniSaved: "服务器已保存", aniPicked: "已选择 {name}（{ms} 毫秒）", aniNone: "目前没有可用的公共服务器。请稍后再试或使用你自己的 Mac 服务器。", aniCurrent: "当前",
     orWord: "或", appleidSignin: "🍎 使用 Apple ID 登录", appleidTitle: "使用 Apple ID 登录",
-    appleidHint: "使用免费或付费开发者账号（建议用备用号）。自动创建证书和描述文件。需要可用的 anisette 服务器（自建或基于 Mac 更稳定；部分公共服务器已被 Apple 屏蔽）。",
+    appleidHint: "使用免费或付费开发者账号，自动创建证书和描述文件。需要 anisette 服务器。",
     anisette: "Anisette 服务器", appleid2fa: "Apple 已向你的受信任设备发送验证码，请在下方输入。", code: "验证码",
     continue: "继续", appleidDone: "已登录 🎀", appleidKind: "Apple ID",
     deviceNotInProfile: "注意：此 iPhone 不在证书的描述文件中，应用将无法打开。",
@@ -163,6 +190,7 @@ document.querySelectorAll(".nav").forEach((b) => b.addEventListener("click", () 
   document.querySelectorAll(".nav").forEach((x) => x.classList.toggle("on", x === b));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("on", v.id === "view-" + b.dataset.view));
   if (b.dataset.view === "device") loadApps();
+  if (b.dataset.view === "anisette") loadAnisette();
 }));
 document.querySelectorAll("[data-lang]").forEach((b) => b.addEventListener("click", () => {
   lang = b.dataset.lang;
@@ -366,6 +394,7 @@ $("#appleid-btn").addEventListener("click", (e) => {
   aidState = null;
   $("#appleid-step1").hidden = false; $("#appleid-step2").hidden = true;
   $("#aid-msg").textContent = ""; $("#aid-submit").textContent = t("continue");
+  api("/api/anisette").then((a) => ($("#aid-server").textContent = a.server)).catch(() => {});
   $("#appleid-dialog").showModal();
 });
 $("#appleid-form").addEventListener("submit", async (e) => {
@@ -376,7 +405,7 @@ $("#appleid-form").addEventListener("submit", async (e) => {
   try {
     if (!aidState) {
       const r = await api("/api/appleid/login", { method: "POST", body: JSON.stringify({
-        email: $("#aid-email").value.trim(), password: $("#aid-pass").value, anisette: $("#aid-anisette").value.trim() }) });
+        email: $("#aid-email").value.trim(), password: $("#aid-pass").value, }) });
       if (r.needs2FA) { aidState = r.id; $("#appleid-step1").hidden = true; $("#appleid-step2").hidden = false; msg.textContent = ""; $("#aid-code").focus(); }
       else { done(); }
     } else {
@@ -514,6 +543,90 @@ async function start(install) {
 }
 
 // ---------- boot ----------
+// ---------- theme ----------
+function applyTheme(mode) {
+  if (mode === "light" || mode === "black") document.documentElement.dataset.theme = mode;
+  else delete document.documentElement.dataset.theme;
+  document.querySelectorAll("[data-theme-set]").forEach((b) => b.classList.toggle("on", b.dataset.themeSet === (mode || "system")));
+}
+let themeMode = (() => { try { return localStorage.getItem("theme") || "system"; } catch { return "system"; } })();
+document.querySelectorAll("[data-theme-set]").forEach((b) => b.addEventListener("click", () => {
+  themeMode = b.dataset.themeSet;
+  try { localStorage.setItem("theme", themeMode); } catch {}
+  applyTheme(themeMode);
+}));
+applyTheme(themeMode);
+
+// ---------- anisette ----------
+let ani = null;
+async function loadAnisette() {
+  try { ani = await api("/api/anisette"); } catch (e) { toast(e.message); return; }
+  $("#ani-presets").innerHTML = ani.presets.map((p) => `<button class="preset ${p.url === ani.server ? "on" : ""}" data-url="${esc(p.url)}"><b>${esc(p.name)}</b><span class="mono small">${esc(p.url.replace("https://", ""))}</span></button>`).join("");
+  if (!ani.presets.some((p) => p.url === ani.server)) $("#ani-url").value = ani.server;
+  $("#aid-server") && ($("#aid-server").textContent = ani.server);
+  renderRelay(ani.relay);
+  checkAnisette();
+}
+function aniRow(k, v) { return `<dt>${esc(k)}</dt><dd>${v}</dd>`; }
+async function checkAnisette() {
+  $("#ani-state").className = "badge"; $("#ani-state").textContent = t("aniChecking");
+  $("#ani-info").innerHTML = "";
+  let st;
+  try { st = await api("/api/anisette/check", { method: "POST", body: JSON.stringify({}) }); } catch (e) { st = { ok: false, error: e.message }; }
+  $("#ani-state").className = "badge " + (st.ok ? "good" : "bad");
+  $("#ani-state").textContent = st.ok ? t("aniOk") : t("aniFail");
+  const kind = st.mac ? `<span class="badge good">${t("aniMac")}</span>` : st.legacy ? `<span class="badge bad">${t("aniLegacy")}</span>` : st.ok ? `<span class="badge warn">${t("aniNonMac")}</span>` : "";
+  $("#ani-info").innerHTML = st.ok ? [
+    aniRow(t("aniServer"), `<span class="mono">${esc(st.server)}</span>`),
+    aniRow(t("aniProtocol"), `${esc(st.version)} ${kind}`),
+    aniRow(t("aniClient"), `<span class="mono small">${esc(st.clientInfo)}</span>`),
+    aniRow(t("aniUA"), `<span class="mono small">${esc(st.userAgent)}</span>`),
+    aniRow(t("aniDevice"), `<span class="mono small">${esc(st.deviceId)}</span>`),
+    aniRow(t("aniMachine"), `<span class="mono small">${esc(st.machineId)}</span>`),
+  ].join("") : aniRow(t("aniServer"), `<span class="mono">${esc(st.server || "")}</span>`) + `<dt></dt><dd class="note bad">${esc(st.error || "")}</dd>`;
+}
+function renderRelay(r) {
+  $("#ani-relay").checked = !!r.running;
+  $("#ani-relay-box").innerHTML = r.running ? `
+    <div class="relay">
+      <div class="qr">${r.qr || ""}</div>
+      <dl class="kv">
+        ${aniRow(t("aniAddresses"), r.addresses.map((a) => `<span class="mono">${esc(a)}</span>`).join("<br>"))}
+        ${aniRow(t("aniUpstream"), `<span class="mono small">${esc(r.upstream)}</span>`)}
+        ${aniRow(t("aniRequests"), String(r.requests))}
+      </dl>
+    </div>` : "";
+}
+$("#ani-presets").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-url]"); if (!b) return;
+  await api("/api/anisette", { method: "POST", body: JSON.stringify({ server: b.dataset.url }) });
+  toast(t("aniSaved")); loadAnisette();
+});
+$("#ani-save").addEventListener("click", async () => {
+  try { await api("/api/anisette", { method: "POST", body: JSON.stringify({ server: $("#ani-url").value }) }); toast(t("aniSaved")); loadAnisette(); }
+  catch (e) { toast(e.message); }
+});
+$("#ani-check").addEventListener("click", checkAnisette);
+$("#ani-reset").addEventListener("click", async () => { await api("/api/anisette/reset", { method: "POST" }); toast(t("aniResetDone")); checkAnisette(); });
+$("#ani-auto").addEventListener("click", async () => {
+  const btn = $("#ani-auto"); btn.disabled = true;
+  $("#ani-auto-res").innerHTML = `<p class="muted small">${t("aniChecking")}</p>`;
+  try {
+    const r = await api("/api/anisette/auto", { method: "POST" });
+    $("#ani-auto-res").innerHTML = r.results.map((x) => `<div class="res"><span class="dot ${x.ok && x.mac ? "ok" : "bad"}"></span><b>${esc(x.name)}</b><span class="muted small">${x.ok ? x.ms + " ms" : esc((x.error || "").slice(0, 60))}</span></div>`).join("") +
+      `<p class="note ${r.best ? "good" : "bad"}">${r.best ? t("aniPicked", { name: r.best.name, ms: r.best.ms }) : t("aniNone")}</p>`;
+    loadAnisette();
+  } catch (e) { $("#ani-auto-res").innerHTML = `<p class="note bad">${esc(e.message)}</p>`; }
+  btn.disabled = false;
+});
+$("#ani-relay").addEventListener("change", async (e) => {
+  try { renderRelay(await api("/api/anisette/relay", { method: "POST", body: JSON.stringify({ on: e.target.checked }) })); }
+  catch (err) { toast(err.message); e.target.checked = false; }
+});
+document.addEventListener("click", (e) => {
+  if (e.target.id === "aid-change") { e.preventDefault(); $("#appleid-dialog").close(); document.querySelector('.nav[data-view="anisette"]').click(); }
+});
+
 applyLang();
 renderIpa();
 (async () => {
@@ -522,18 +635,3 @@ renderIpa();
   await Promise.all([loadCerts(), loadDevices()]);
 })();
 setInterval(() => { if (!document.hidden) loadDevices(); }, 8000);
-
-// ---------- theme ----------
-const THEMES = ["auto", "light", "dark"];
-const THEME_IC = { auto: "◐ Auto", light: "☀ Light", dark: "☾ Dark" };
-let themeMode = (() => { try { return localStorage.getItem("sayotheme"); } catch { return null; } })() || "auto";
-function applyTheme() {
-  if (themeMode === "auto") document.documentElement.removeAttribute("data-theme");
-  else document.documentElement.setAttribute("data-theme", themeMode);
-  const ic = document.getElementById("theme-ic"); if (ic) ic.textContent = THEME_IC[themeMode];
-  try { localStorage.setItem("sayotheme", themeMode); } catch {}
-}
-document.getElementById("theme-btn")?.addEventListener("click", () => {
-  themeMode = THEMES[(THEMES.indexOf(themeMode) + 1) % THEMES.length]; applyTheme();
-});
-applyTheme();

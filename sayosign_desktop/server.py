@@ -24,7 +24,9 @@ import zipfile
 from cryptography.hazmat.primitives import serialization
 
 from . import appleid as aid
+from .anisette import PUBLIC_SERVERS, AnisetteError
 from .certs import CertError, CertStore
+from .relay import AnisetteConfig, Relay, pick_best
 
 HERE = Path(__file__).parent
 WEB = HERE / "web"
@@ -144,6 +146,8 @@ class App:
         self.certs = CertStore(CONFIG / "certs")
         self.accounts = AppleIDStore(CONFIG / "appleid")
         self.pending = {}  # in-memory half-finished logins
+        self.ani = AnisetteConfig(CONFIG / "anisette.json", CONFIG / "anisette-state")
+        self.relay = Relay(self.ani)
         self.jobs: dict[str, Job] = {}
         FILES.mkdir(parents=True, exist_ok=True)
 
@@ -203,6 +207,64 @@ class App:
         self.certs.remove(request.match_info["id"])
         return web.json_response({"ok": True})
 
+    # ---------- anisette ----------
+    async def anisette_get(self, request):
+        return web.json_response({"server": self.ani.server, "presets": [{"name": n, "url": u} for n, u in PUBLIC_SERVERS],
+                                  "relay": self.relay.info()})
+
+    async def anisette_set(self, request):
+        b = await request.json()
+        url = (b.get("server") or "").strip().rstrip("/")
+        if not url:
+            return web.json_response({"error": "Enter a server address"}, status=400)
+        if "://" not in url:
+            url = "https://" + url
+        self.ani.data["server"] = url
+        self.ani.save()
+        return await self.anisette_get(request)
+
+    async def anisette_check(self, request):
+        b = await request.json() if request.can_read_body else {}
+        url = (b.get("server") or self.ani.server).strip()
+        return web.json_response(await asyncio.to_thread(self.ani.anisette(url).status))
+
+    async def anisette_auto(self, request):
+        best, results = await pick_best(self.ani.state_dir)
+        if best:
+            self.ani.data["server"] = best["server"]
+            self.ani.save()
+        return web.json_response({"best": best, "results": results, "server": self.ani.server})
+
+    async def anisette_reset(self, request):
+        await asyncio.to_thread(self.ani.anisette().reset)
+        return web.json_response({"ok": True})
+
+    async def anisette_relay(self, request):
+        b = await request.json()
+        if b.get("port"):
+            self.ani.data["port"] = int(b["port"])
+        try:
+            if b.get("on"):
+                await self.relay.stop()
+                await self.relay.start()
+            else:
+                await self.relay.stop()
+        except AnisetteError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        self.ani.data["relay"] = bool(b.get("on"))
+        self.ani.save()
+        return web.json_response(self.relay.info())
+
+    async def on_startup(self, app):
+        if self.ani.data.get("relay"):
+            try:
+                await self.relay.start()
+            except AnisetteError:
+                pass
+
+    async def on_cleanup(self, app):
+        await self.relay.stop()
+
     # ---------- Apple ID ----------
     async def appleid_list(self, request):
         return web.json_response(await asyncio.to_thread(self.accounts.list))
@@ -221,59 +283,72 @@ class App:
 
     async def appleid_login(self, request):
         b = await request.json()
-        anisette = b.get("anisette") or "https://ani.sidestore.io"
-        device_id = str(uuid.uuid4()).upper()
+        server = self.ani.server
 
         def do_login():
-            an = aid.Anisette.fetch(anisette, device_id)
-            gs = aid.GSAuth(an, b["email"], b["password"])
-            factor = gs.login()
-            return an, gs, factor
+            sess = aid.Session(self.ani.anisette(server))
+            gs = aid.GSAuth(sess, b["email"].strip(), b["password"])
+            try:
+                factor = gs.login()
+            except aid.AppleIDError as e:
+                if any(c in str(e) for c in ("-45061", "-80045", "-80046")):
+                    sess.an.reset()  # stale or rejected identity: start fresh once
+                    factor = gs.login()
+                else:
+                    raise
+            return sess, gs, factor
 
         try:
-            an, gs, factor = await asyncio.to_thread(do_login)
-        except aid.AppleIDError as e:
+            sess, gs, factor = await asyncio.to_thread(do_login)
+        except (aid.AppleIDError, AnisetteError) as e:
             return web.json_response({"error": str(e)}, status=400)
         if factor:
             pid = uuid.uuid4().hex[:12]
-            self.pending[pid] = {"an": an, "gs": gs, "anisette": anisette, "device_id": device_id}
-            await asyncio.to_thread(gs.request_code)
+            self.pending[pid] = {"sess": sess, "gs": gs, "server": server}
+            try:
+                await asyncio.to_thread(gs.request_code)
+            except Exception as e:
+                return web.json_response({"error": f"Could not send the code: {e}"}, status=400)
             return web.json_response({"id": pid, "needs2FA": True, "factor": factor})
-        acc = await self._finish_login(an, gs, anisette, device_id)
+        try:
+            acc = await self._finish_login(sess, gs, server)
+        except (aid.AppleIDError, AnisetteError) as e:
+            return web.json_response({"error": str(e)}, status=400)
         return web.json_response(acc)
 
     async def appleid_2fa(self, request):
         b = await request.json()
         p = self.pending.get(b["id"])
         if not p:
-            return web.json_response({"error": "session expired"}, status=400)
+            return web.json_response({"error": "Session expired, sign in again"}, status=400)
         try:
-            await asyncio.to_thread(p["gs"].submit_code, b["code"])
-        except aid.AppleIDError as e:
+            await asyncio.to_thread(p["gs"].submit_code, b["code"].strip())
+            acc = await self._finish_login(p["sess"], p["gs"], p["server"])
+        except (aid.AppleIDError, AnisetteError) as e:
             return web.json_response({"error": str(e)}, status=400)
-        acc = await self._finish_login(p["an"], p["gs"], p["anisette"], p["device_id"])
         self.pending.pop(b["id"], None)
         return web.json_response(acc)
 
-    async def _finish_login(self, an, gs, anisette, device_id):
+    async def _finish_login(self, sess, gs, server):
         def work():
-            session = gs.xcode_token()
-            api = aid.DeveloperAPI(session, an)
+            token = gs.xcode_token()
+            api = aid.DeveloperAPI(token, sess)
             teams = api.teams()
             if not teams:
                 raise aid.AppleIDError("This Apple ID has no developer team")
             team = teams[0]
             key, cert = api.create_certificate(team["teamId"])
-            return session, team, key, cert
+            return token, team, key, cert
 
-        session, team, key, cert = await asyncio.to_thread(work)
+        token, team, key, cert = await asyncio.to_thread(work)
         udid = await self._first_udid()
         if udid:
             try:
-                await asyncio.to_thread(lambda: aid.DeveloperAPI(session, an).ensure_device(team["teamId"], udid))
+                await asyncio.to_thread(lambda: aid.DeveloperAPI(token, sess).ensure_device(team["teamId"], udid))
             except aid.AppleIDError:
                 pass
-        return await asyncio.to_thread(self.accounts.save, session["email"], team, session, anisette, key, cert, device_id)
+        return await asyncio.to_thread(self.accounts.save, token["email"], team, token, server, key, cert,
+                                       sess.an.device_id)
 
     async def _apple_identity(self, acc_id, ipa):
         """Fetches a fresh provisioning profile for this IPA from the Apple account and
@@ -286,8 +361,8 @@ class App:
             meta, session, key, cert = self.accounts.load(acc_id)
             if datetime.fromisoformat(session["expiry"]) < datetime.now(timezone.utc):
                 raise aid.AppleIDError("Apple ID session expired, sign in again")
-            an = aid.Anisette.fetch(meta["anisette"], meta["device_id"])
-            api = aid.DeveloperAPI(session, an)
+            sess = aid.Session(self.ani.anisette(meta.get("anisette") or self.ani.server))
+            api = aid.DeveloperAPI(session, sess)
             prof = api.profile(meta["team"], bundle_id, name)
             tmp = FILES / ("aid_" + uuid.uuid4().hex)
             tmp.mkdir()
@@ -437,6 +512,12 @@ class App:
         r.add_post("/api/certs", self.certs_add)
         r.add_post("/api/certs/{id}/check", self.certs_check)
         r.add_delete("/api/certs/{id}", self.certs_delete)
+        r.add_get("/api/anisette", self.anisette_get)
+        r.add_post("/api/anisette", self.anisette_set)
+        r.add_post("/api/anisette/check", self.anisette_check)
+        r.add_post("/api/anisette/auto", self.anisette_auto)
+        r.add_post("/api/anisette/reset", self.anisette_reset)
+        r.add_post("/api/anisette/relay", self.anisette_relay)
         r.add_get("/api/appleid", self.appleid_list)
         r.add_post("/api/appleid/login", self.appleid_login)
         r.add_post("/api/appleid/2fa", self.appleid_2fa)
@@ -448,4 +529,6 @@ class App:
         r.add_get("/api/jobs/{id}/events", self.job_events)
         r.add_get("/api/jobs/{id}/download", self.job_download)
         r.add_static("/static/", WEB)
+        app.on_startup.append(self.on_startup)
+        app.on_cleanup.append(self.on_cleanup)
         return app

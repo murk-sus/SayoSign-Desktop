@@ -1,12 +1,13 @@
 """Sign in to a free or paid Apple Developer account from the desktop.
 
-Faithful port of SayoSign's iOS GrandSlam flow. The SRP-6a here is byte-for-byte
-verified against the C engine's tested implementation. It needs an anisette server
-(host your own with https://github.com/Dadoum/anisette-v3-server or use a public one).
+GrandSlam (SRP-6a, byte-for-byte verified against the C engine) on top of the anisette
+v3 client in anisette.py. Endpoints come from Apple's URL bag; every request carries the
+client info of the anisette server, which Apple requires since October 2026.
 """
 import hashlib
 import json
 import plistlib
+import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -18,7 +19,8 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.x509.oid import NameOID
 
-GSA = "https://gsa.apple.com/grandslam/GsService2"
+from .anisette import Anisette, AnisetteError, apple_ssl
+
 DEV = "https://developerservices2.apple.com/services/QH65B2"
 CLIENT_ID = "XABBG36SBA"
 APP = "com.apple.gs.xcode.auth"
@@ -74,130 +76,93 @@ class _SRP:
         self.M2 = _h(self.Ab, self.M1, self.K)
 
 
-class Anisette:
-    def __init__(self, headers, device_id):
-        self.headers = headers
-        self.device_id = device_id
-
-    @staticmethod
-    def fetch(server, device_id):
-        req = urllib.request.Request(server, headers={"User-Agent": "akd/1.0"})
-        try:
-            with urllib.request.urlopen(req, timeout=20) as r:
-                raw = r.read()
-                hdr = {k: v for k, v in r.headers.items()}
-        except urllib.error.HTTPError as e:
-            raise AppleIDError(f"The anisette server returned HTTP {e.code}. It may be down or blocked — "
-                               f"try a different one, or self-host anisette-v3-server.")
-        except urllib.error.URLError as e:
-            raise AppleIDError(f"Cannot reach the anisette server ({server}). Check the URL or your connection.")
-        md = hdr.get("X-Apple-I-MD")
-        if not md:
-            try:
-                j = json.loads(raw)
-                hdr.update({k: v for k, v in j.items() if k.startswith("X-Apple")})
-            except Exception:
-                pass
-        if not hdr.get("X-Apple-I-MD") or not hdr.get("X-Apple-I-MD-M"):
-            raise AppleIDError("Anisette server is missing machine data. Use a v1/v3 server.")
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        hdr.setdefault("X-Apple-I-Client-Time", now)
-        hdr.setdefault("X-Apple-Locale", "en_US")
-        hdr.setdefault("X-Apple-I-TimeZone", "UTC")
-        hdr.setdefault("X-Apple-I-MD-LU", hashlib.sha256(device_id.encode()).hexdigest())
-        hdr.setdefault("X-Apple-I-MD-RINFO", "17106176")
-        hdr.setdefault("X-Apple-I-SRL-NO", "0")
-        hdr.setdefault("X-Mme-Device-Id", device_id)
-        return Anisette(hdr, device_id)
-
-    _KEYS = ["X-Apple-I-Client-Time", "X-Apple-I-MD", "X-Apple-I-MD-M", "X-Apple-I-MD-LU",
-             "X-Apple-I-MD-RINFO", "X-Apple-I-SRL-NO", "X-Apple-I-TimeZone", "X-Apple-Locale", "X-Mme-Device-Id"]
-
-    @property
-    def cpd(self):
-        d = {"bootstrap": True, "icscrec": True, "pbe": False, "prkgen": True, "svct": "iCloud",
-             "X-Apple-I-Client-Time": self.headers["X-Apple-I-Client-Time"],
-             "loc": self.headers.get("X-Apple-Locale", "en_US")}
-        for k in self._KEYS:
-            if k in self.headers:
-                d[k] = self.headers[k]
-        return d
-
-    def apply(self, req):
-        for k in self._KEYS:
-            if k in self.headers:
-                req.add_header(k, self.headers[k])
-        req.add_header("Loc", self.headers.get("X-Apple-Locale", "en_US"))
-
-    @property
-    def client_info(self):
-        # Apple began rejecting Mac/Xcode and Android client-info in Oct 2026 (-80045);
-        # Windows identity is currently accepted. Prefer the anisette server's own value.
-        return self.headers.get("X-MMe-Client-Info",
-                                "<PC> <Windows;6.2(0,0);9200> <com.apple.AuthKitWin/1 (com.apple.iCloud/7.21)>")
-
-
-# Apple error codes seen since the Oct 2026 GrandSlam tightening.
-_EC_HELP = {
-    -20209: "Apple temporarily locked this Apple ID after repeated sign-in attempts. "
-            "Wait a few hours and use a spare Apple ID, not your main account.",
-    -80045: "Apple rejected the anisette data (it must come from a macOS/Windows source "
-            "with matching client info). Try a different anisette server.",
-    -22406: "Wrong Apple ID or password.",
-    -22421: "The two-factor code is wrong or expired.",
+# Human-readable messages for common GrandSlam error codes.
+GSA_ERRORS = {
+    -20101: "Wrong Apple ID or password",
+    -22406: "Wrong Apple ID or password",
+    -20209: "This Apple ID is locked. Unlock it at iforgot.apple.com",
+    -20751: "This Apple ID is locked. Unlock it at iforgot.apple.com",
+    -80045: "Apple rejected the anisette data. Use a Mac-based anisette server (e.g. ani.iloader.app)",
+    -80046: "Apple rejected the anisette data. Reset anisette and try a Mac-based server",
+    -45061: "Anisette is not provisioned for this server. Reset anisette and try again",
+    -22410: "Too many attempts. Wait a few minutes and try again",
+    -22411: "Apple is limiting sign-ins right now. Try again later",
 }
 
 
-def _gsa_error(ec, em=None):
-    msg = _EC_HELP.get(ec, em or f"Apple error {ec}")
-    return AppleIDError(msg)
-
-
-def _post_gsa(anisette, body):
-    payload = {"Header": {"Version": "1.0.1"},
-               "Request": {**body, "cpd": body.get("cpd", anisette.cpd)}}
-    data = plistlib.dumps(payload)
-    req = urllib.request.Request(GSA, data=data, method="POST")
-    req.add_header("Content-Type", "text/x-xml-plist")
-    req.add_header("Accept", "*/*")
-    req.add_header("User-Agent", "akd/1.0 CFNetwork/1404.0.5 Darwin/22.3.0")
-    req.add_header("X-MMe-Client-Info", anisette.client_info)
-    req.add_header("Connection", "close")  # Apple edge drops pooled/keep-alive connections
-    try:
-        with urllib.request.urlopen(req, timeout=45) as r:
-            resp = plistlib.loads(r.read())
-    except urllib.error.HTTPError as e:
-        if e.code == 503:
-            raise AppleIDError("Apple's GrandSlam server returned 503. The anisette server is "
-                               "likely rejected — switch to a Mac-backed or self-hosted anisette server.")
-        raise AppleIDError(f"Apple sign-in failed (HTTP {e.code}).")
-    out = resp.get("Response", resp)
-    status = out.get("Status", {})
+def _gsa_error(status):
     ec = status.get("ec", 0)
-    if ec not in (0, None):
-        raise _gsa_error(ec, status.get("em"))
-    return out
+    if not ec:
+        return None
+    msg = GSA_ERRORS.get(ec) or status.get("em") or "Apple error"
+    return AppleIDError(f"{msg} ({ec})")
+
+
+class Session:
+    """Anisette + Apple's URL bag, shared by every request in one sign-in."""
+
+    def __init__(self, anisette: Anisette):
+        self.an = anisette.detect()
+        self.bag = self.an.url_bag()
+
+    def url(self, key):
+        u = self.bag.get(key)
+        if not u:
+            raise AppleIDError(f"Apple's URL bag has no '{key}'")
+        return u
+
+    def cpd(self, h):
+        d = {"bootstrap": True, "icscrec": True, "loc": "en_US", "pbe": False, "prkgen": True, "svct": "iCloud"}
+        d.update({k: v for k, v in h.items() if k in ("X-Apple-I-MD", "X-Apple-I-MD-M", "X-Mme-Device-Id",
+                                                        "X-Apple-I-MD-LU", "X-Apple-I-MD-RINFO", "X-Apple-I-SRL-NO",
+                                                        "X-Apple-I-Client-Time", "X-Apple-I-TimeZone", "X-Apple-Locale")})
+        return d
+
+    def gsa(self, request):
+        h = self.an.headers()
+        request = {**request, "cpd": self.cpd(h)}
+        body = plistlib.dumps({"Header": {"Version": "1.0.1"}, "Request": request})
+        req = urllib.request.Request(self.url("gsService"), data=body, method="POST",
+                                     headers={**self.an.base_headers(), "Connection": "close"})
+        try:
+            with urllib.request.urlopen(req, context=apple_ssl(), timeout=30) as r:
+                resp = plistlib.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code in (500, 503):
+                raise AppleIDError(f"Apple answered {e.code}. This usually means the anisette data was rejected; "
+                                   "switch to a Mac-based anisette server and reset anisette.")
+            raise
+        out = resp.get("Response", resp)
+        err = _gsa_error(out.get("Status", {}))
+        if err:
+            raise err
+        return out
+
+    def request(self, url, method, extra, json_body=False, data=None):
+        h = {**self.an.base_headers(json_body), **self.an.headers(), **extra}
+        req = urllib.request.Request(url, data=data, method=method, headers=h)
+        return urllib.request.urlopen(req, context=apple_ssl(), timeout=30)
 
 
 class GSAuth:
-    def __init__(self, anisette, email, password):
-        self.an = anisette
+    def __init__(self, session: Session, email, password):
+        self.s = session
         self.email = email
         self.password = password
+        self.second = None
 
     def login(self):
         import os
         srp = _SRP(os.urandom(32))
-        init = _post_gsa(self.an, {"A2k": srp.Ab, "cpd": self.an.cpd, "o": "init",
-                                   "ps": ["s2k", "s2k_fo"], "u": self.email})
+        init = self.s.gsa({"A2k": srp.Ab, "o": "init", "ps": ["s2k", "s2k_fo"], "u": self.email})
         sp, it, salt, B, c = init.get("sp"), init.get("i"), init.get("s"), init.get("B"), init.get("c")
-        if not all([sp, it, salt, B, c]):
+        if sp not in ("s2k", "s2k_fo") or not all([it, salt, B, c]):
             raise AppleIDError("Apple did not accept the login request")
         hashed = hashlib.sha256(self.password.encode()).digest()
         pw_input = hashed.hex().encode() if sp == "s2k_fo" else hashed
         pass_key = hashlib.pbkdf2_hmac("sha256", pw_input, salt, it, 32)
         srp.process(self.email, pass_key, salt, B)
-        comp = _post_gsa(self.an, {"M1": srp.M1, "c": c, "cpd": self.an.cpd, "o": "complete", "u": self.email})
+        comp = self.s.gsa({"M1": srp.M1, "c": c, "o": "complete", "u": self.email})
         if comp.get("M2") and comp["M2"] != srp.M2:
             raise AppleIDError("Apple server proof mismatch")
         spd = comp.get("spd")
@@ -205,62 +170,60 @@ class GSAuth:
             raise AppleIDError("Wrong Apple ID or password")
         key = _hmac(srp.K, b"extra data key:")
         iv = _hmac(srp.K, b"extra data iv:")[:16]
-        dec = _cbc_decrypt(key, iv, spd)
-        sd = plistlib.loads(dec)
+        sd = plistlib.loads(_cbc_decrypt(key, iv, spd))
         self.session = {"adsid": sd["adsid"], "idms": sd["GsIdmsToken"], "sk": sd["sk"], "c": sd["c"]}
-        au = comp.get("Status", {}).get("au")
-        self.second = {"trustedDeviceSecondaryAuth": "trusted", "secondaryAuth": "sms"}.get(au)
+        status = comp.get("Status", {})
+        au = status.get("au")
+        if au == "trustedDeviceSecondaryAuth":
+            self.second = "trusted"
+        elif au == "secondaryAuth":
+            self.second = "sms"
+        elif au and au != "repair":
+            raise AppleIDError(f"Apple asks for an extra step: {au}. Finish it on apple.com and try again.")
+        else:
+            self.second = None
         return self.second
 
-    def _auth_req(self, url, method, json_body=False):
+    def _identity(self):
         import base64
-        req = urllib.request.Request(url, method=method)
-        ident = base64.b64encode(f"{self.session['adsid']}:{self.session['idms']}".encode()).decode()
-        req.add_header("X-Apple-Identity-Token", ident)
-        req.add_header("X-Apple-App-Info", APP)
-        req.add_header("X-Xcode-Version", "11.2 (11B41)")
-        ct = "application/json" if json_body else "text/x-xml-plist"
-        req.add_header("Content-Type", ct)
-        req.add_header("Accept", ct)
-        req.add_header("User-Agent", "Xcode")
-        req.add_header("Connection", "close")
-        self.an.apply(req)
-        return req
+        return {"X-Apple-Identity-Token": base64.b64encode(f"{self.session['adsid']}:{self.session['idms']}".encode()).decode()}
 
     def request_code(self):
         if self.second == "trusted":
-            urllib.request.urlopen(self._auth_req("https://gsa.apple.com/auth/verify/trusteddevice", "GET"), timeout=30)
+            self.s.request(self.s.url("trustedDeviceSecondaryAuth"), "GET", self._identity()).close()
         else:
-            urllib.request.urlopen(self._auth_req("https://gsa.apple.com/auth", "GET", True), timeout=30)
-            req = self._auth_req("https://gsa.apple.com/auth/verify/phone", "PUT", True)
-            req.data = json.dumps({"phoneNumber": {"id": 1}, "mode": "sms"}).encode()
-            urllib.request.urlopen(req, timeout=30)
+            self.s.request("https://gsa.apple.com/auth", "GET", self._identity(), json_body=True).close()
+            self.s.request("https://gsa.apple.com/auth/verify/phone", "PUT", self._identity(), json_body=True,
+                           data=json.dumps({"phoneNumber": {"id": 1}, "mode": "sms"}).encode()).close()
 
     def submit_code(self, code):
         if self.second == "trusted":
-            req = self._auth_req("https://gsa.apple.com/grandslam/GsService2/validate", "GET")
-            req.add_header("security-code", code)
-            with urllib.request.urlopen(req, timeout=30) as r:
-                p = plistlib.loads(r.read())
-            if p.get("ec", 0):
-                raise AppleIDError(p.get("em") or "Wrong code")
+            r = self.s.request(self.s.url("validateCode"), "GET", {**self._identity(), "security-code": code})
+            p = plistlib.loads(r.read())
+            err = _gsa_error(p.get("Status", p))
+            if err:
+                raise AppleIDError("Wrong code" if p.get("Status", p).get("ec") in (-21669,) else str(err))
         else:
-            req = self._auth_req("https://gsa.apple.com/auth/verify/phone/securitycode", "POST", True)
-            req.data = json.dumps({"phoneNumber": {"id": 1}, "securityCode": {"code": code}, "mode": "sms"}).encode()
-            urllib.request.urlopen(req, timeout=30)
-        # Re-login to fold the trust token into a fresh session.
+            try:
+                self.s.request("https://gsa.apple.com/auth/verify/phone/securitycode", "POST", self._identity(),
+                               json_body=True, data=json.dumps({"phoneNumber": {"id": 1},
+                                                                "securityCode": {"code": code}, "mode": "sms"}).encode()).close()
+            except urllib.error.HTTPError:
+                raise AppleIDError("Wrong code")
+        # The trusted session only exists after logging in again.
         self.login()
+        if self.second:
+            raise AppleIDError("Apple still asks for a code. Try signing in again.")
 
     def xcode_token(self):
         s = self.session
         checksum = _hmac(s["sk"], b"apptokens" + s["adsid"].encode() + APP.encode())
-        resp = _post_gsa(self.an, {"app": [APP], "c": s["c"], "checksum": checksum, "cpd": self.an.cpd,
-                                   "o": "apptokens", "t": s["idms"], "u": s["adsid"]})
+        resp = self.s.gsa({"app": [APP], "c": s["c"], "checksum": checksum, "o": "apptokens",
+                           "t": s["idms"], "u": s["adsid"]})
         et = resp.get("et")
         if not et:
             raise AppleIDError("Apple did not return an app token")
-        dec = _gcm_decrypt(s["sk"], et)
-        p = plistlib.loads(dec)
+        p = plistlib.loads(_gcm_decrypt(s["sk"], et))
         x = p["t"][APP]
         exp = datetime.fromtimestamp(x["expiry"] / 1000, timezone.utc) if x.get("expiry") else datetime.now(timezone.utc) + timedelta(days=7)
         return {"adsid": s["adsid"], "idms": s["idms"], "token": x["token"], "expiry": exp.isoformat(), "email": self.email}
@@ -285,26 +248,19 @@ def _gcm_decrypt(key, blob):
 
 
 class DeveloperAPI:
-    def __init__(self, session, anisette):
+    def __init__(self, session, gs: Session):
         self.s = session
-        self.an = anisette
+        self.gs = gs
 
     def call(self, action, ios=True, **params):
         path = f"ios/{action}.action" if ios else f"{action}.action"
-        body = {**params, "clientId": CLIENT_ID, "protocolVersion": "QH65B2",
-                "requestId": str(uuid.uuid4()).upper()}
-        req = urllib.request.Request(f"{DEV}/{path}?clientId={CLIENT_ID}", data=plistlib.dumps(body), method="POST")
-        for k, v in {"Content-Type": "text/x-xml-plist", "Accept": "text/x-xml-plist",
-                     "Accept-Language": "en-us", "User-Agent": "Xcode", "X-Apple-App-Info": APP,
-                     "X-Xcode-Version": "11.2 (11B41)", "X-Apple-I-Identity-Id": self.s["adsid"],
-                     "X-Apple-GS-Token": self.s["token"], "Connection": "close"}.items():
-            req.add_header(k, v)
-        self.an.apply(req)
-        try:
-            with urllib.request.urlopen(req, timeout=45) as r:
-                p = plistlib.loads(r.read())
-        except urllib.error.HTTPError as e:
-            raise AppleIDError(f"Apple developer services returned HTTP {e.code}.")
+        body = {"clientId": CLIENT_ID, "protocolVersion": "QH65B2", "requestId": str(uuid.uuid4()).upper(),
+                "userLocale": ["en_US"], **params}
+        h = {**self.gs.an.base_headers(), **self.gs.an.headers(), "Accept-Language": "en-us",
+             "X-Apple-I-Identity-Id": self.s["adsid"], "X-Apple-GS-Token": self.s["token"]}
+        req = urllib.request.Request(f"{DEV}/{path}?clientId={CLIENT_ID}", data=plistlib.dumps(body), method="POST", headers=h)
+        with urllib.request.urlopen(req, context=apple_ssl(), timeout=40) as r:
+            p = plistlib.loads(r.read())
         if p.get("resultCode", 0):
             raise AppleIDError(p.get("userString") or p.get("resultString") or f"error {p['resultCode']}")
         return p
@@ -332,7 +288,7 @@ class DeveloperAPI:
                     pass
         try:
             submit = self.call("submitDevelopmentCSR", teamId=team, csrContent=pem,
-                               machineId=self.an.device_id, machineName="SayoSign")
+                               machineId=self.gs.an.device_id, machineName="SayoSign")
         except AppleIDError:
             if existing and existing[0].get("serialNumber"):
                 self.call("revokeDevelopmentCert", teamId=team, serialNumber=existing[0]["serialNumber"])
