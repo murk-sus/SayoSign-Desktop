@@ -82,9 +82,15 @@ class Anisette:
     @staticmethod
     def fetch(server, device_id):
         req = urllib.request.Request(server, headers={"User-Agent": "akd/1.0"})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            raw = r.read()
-            hdr = {k: v for k, v in r.headers.items()}
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                raw = r.read()
+                hdr = {k: v for k, v in r.headers.items()}
+        except urllib.error.HTTPError as e:
+            raise AppleIDError(f"The anisette server returned HTTP {e.code}. It may be down or blocked — "
+                               f"try a different one, or self-host anisette-v3-server.")
+        except urllib.error.URLError as e:
+            raise AppleIDError(f"Cannot reach the anisette server ({server}). Check the URL or your connection.")
         md = hdr.get("X-Apple-I-MD")
         if not md:
             try:
@@ -125,8 +131,26 @@ class Anisette:
 
     @property
     def client_info(self):
+        # Apple began rejecting Mac/Xcode and Android client-info in Oct 2026 (-80045);
+        # Windows identity is currently accepted. Prefer the anisette server's own value.
         return self.headers.get("X-MMe-Client-Info",
-                                "<MacBookPro15,1> <Mac OS X;13.1;22C65> <com.apple.AuthKit/1 (com.apple.dt.Xcode/3594.4.19)>")
+                                "<PC> <Windows;6.2(0,0);9200> <com.apple.AuthKitWin/1 (com.apple.iCloud/7.21)>")
+
+
+# Apple error codes seen since the Oct 2026 GrandSlam tightening.
+_EC_HELP = {
+    -20209: "Apple temporarily locked this Apple ID after repeated sign-in attempts. "
+            "Wait a few hours and use a spare Apple ID, not your main account.",
+    -80045: "Apple rejected the anisette data (it must come from a macOS/Windows source "
+            "with matching client info). Try a different anisette server.",
+    -22406: "Wrong Apple ID or password.",
+    -22421: "The two-factor code is wrong or expired.",
+}
+
+
+def _gsa_error(ec, em=None):
+    msg = _EC_HELP.get(ec, em or f"Apple error {ec}")
+    return AppleIDError(msg)
 
 
 def _post_gsa(anisette, body):
@@ -138,12 +162,20 @@ def _post_gsa(anisette, body):
     req.add_header("Accept", "*/*")
     req.add_header("User-Agent", "akd/1.0 CFNetwork/1404.0.5 Darwin/22.3.0")
     req.add_header("X-MMe-Client-Info", anisette.client_info)
-    with urllib.request.urlopen(req, timeout=30) as r:
-        resp = plistlib.loads(r.read())
+    req.add_header("Connection", "close")  # Apple edge drops pooled/keep-alive connections
+    try:
+        with urllib.request.urlopen(req, timeout=45) as r:
+            resp = plistlib.loads(r.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 503:
+            raise AppleIDError("Apple's GrandSlam server returned 503. The anisette server is "
+                               "likely rejected — switch to a Mac-backed or self-hosted anisette server.")
+        raise AppleIDError(f"Apple sign-in failed (HTTP {e.code}).")
     out = resp.get("Response", resp)
     status = out.get("Status", {})
-    if status.get("ec", 0) not in (0, None):
-        raise AppleIDError(status.get("em") or f"Apple error {status.get('ec')}")
+    ec = status.get("ec", 0)
+    if ec not in (0, None):
+        raise _gsa_error(ec, status.get("em"))
     return out
 
 
@@ -191,6 +223,7 @@ class GSAuth:
         req.add_header("Content-Type", ct)
         req.add_header("Accept", ct)
         req.add_header("User-Agent", "Xcode")
+        req.add_header("Connection", "close")
         self.an.apply(req)
         return req
 
@@ -264,11 +297,14 @@ class DeveloperAPI:
         for k, v in {"Content-Type": "text/x-xml-plist", "Accept": "text/x-xml-plist",
                      "Accept-Language": "en-us", "User-Agent": "Xcode", "X-Apple-App-Info": APP,
                      "X-Xcode-Version": "11.2 (11B41)", "X-Apple-I-Identity-Id": self.s["adsid"],
-                     "X-Apple-GS-Token": self.s["token"]}.items():
+                     "X-Apple-GS-Token": self.s["token"], "Connection": "close"}.items():
             req.add_header(k, v)
         self.an.apply(req)
-        with urllib.request.urlopen(req, timeout=40) as r:
-            p = plistlib.loads(r.read())
+        try:
+            with urllib.request.urlopen(req, timeout=45) as r:
+                p = plistlib.loads(r.read())
+        except urllib.error.HTTPError as e:
+            raise AppleIDError(f"Apple developer services returned HTTP {e.code}.")
         if p.get("resultCode", 0):
             raise AppleIDError(p.get("userString") or p.get("resultString") or f"error {p['resultCode']}")
         return p

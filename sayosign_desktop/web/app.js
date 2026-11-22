@@ -30,7 +30,7 @@ const S = {
     uninstallConfirm: "Delete {name} from your iPhone?", deleted: "Deleted", daysLeft: "{n} days left", expired: "expired",
     cliMissing: "The signing engine was not found. Run `make` in the SayoSign folder.",
     orWord: "or", appleidSignin: "🍎 Sign in with Apple ID", appleidTitle: "Sign in with Apple ID",
-    appleidHint: "Use a free or paid developer account. A certificate and profile are created for you. Needs an anisette server.",
+    appleidHint: "Use a free or paid developer account — ideally a spare one. A certificate and profile are created for you. Needs a working anisette server (self-hosted or Mac-backed works best; Apple blocks some public ones).",
     anisette: "Anisette server", appleid2fa: "Apple sent a code to your trusted devices. Enter it below.", code: "Code",
     continue: "Continue", appleidDone: "Signed in 🎀", appleidKind: "Apple ID",
     deviceNotInProfile: "Warning: this iPhone is not in the certificate's profile, the app will not open.",
@@ -63,7 +63,7 @@ const S = {
     uninstallConfirm: "Удалить {name} с айфона?", deleted: "Удалено", daysLeft: "осталось {n} дн.", expired: "истёк",
     cliMissing: "Движок подписи не найден. Выполни `make` в папке SayoSign.",
     orWord: "или", appleidSignin: "🍎 Войти через Apple ID", appleidTitle: "Вход через Apple ID",
-    appleidHint: "Бесплатный или платный аккаунт разработчика. Сертификат и профиль создаются автоматически. Нужен anisette-сервер.",
+    appleidHint: "Бесплатный или платный аккаунт разработчика, лучше запасной. Сертификат и профиль создаются автоматически. Нужен рабочий anisette-сервер (свой или на базе Mac надёжнее; часть публичных Apple блокирует).",
     anisette: "Anisette-сервер", appleid2fa: "Apple отправил код на доверенные устройства. Введи его ниже.", code: "Код",
     continue: "Продолжить", appleidDone: "Вход выполнен 🎀", appleidKind: "Apple ID",
     deviceNotInProfile: "Внимание: этого айфона нет в профиле сертификата, приложение не откроется.",
@@ -96,7 +96,7 @@ const S = {
     uninstallConfirm: "从 iPhone 删除 {name}？", deleted: "已删除", daysLeft: "剩余 {n} 天", expired: "已过期",
     cliMissing: "未找到签名引擎。请在 SayoSign 目录中运行 `make`。",
     orWord: "或", appleidSignin: "🍎 使用 Apple ID 登录", appleidTitle: "使用 Apple ID 登录",
-    appleidHint: "使用免费或付费开发者账号，自动创建证书和描述文件。需要 anisette 服务器。",
+    appleidHint: "使用免费或付费开发者账号（建议用备用号）。自动创建证书和描述文件。需要可用的 anisette 服务器（自建或基于 Mac 更稳定；部分公共服务器已被 Apple 屏蔽）。",
     anisette: "Anisette 服务器", appleid2fa: "Apple 已向你的受信任设备发送验证码，请在下方输入。", code: "验证码",
     continue: "继续", appleidDone: "已登录 🎀", appleidKind: "Apple ID",
     deviceNotInProfile: "注意：此 iPhone 不在证书的描述文件中，应用将无法打开。",
@@ -522,3 +522,18 @@ renderIpa();
   await Promise.all([loadCerts(), loadDevices()]);
 })();
 setInterval(() => { if (!document.hidden) loadDevices(); }, 8000);
+
+// ---------- theme ----------
+const THEMES = ["auto", "light", "dark"];
+const THEME_IC = { auto: "◐ Auto", light: "☀ Light", dark: "☾ Dark" };
+let themeMode = (() => { try { return localStorage.getItem("sayotheme"); } catch { return null; } })() || "auto";
+function applyTheme() {
+  if (themeMode === "auto") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", themeMode);
+  const ic = document.getElementById("theme-ic"); if (ic) ic.textContent = THEME_IC[themeMode];
+  try { localStorage.setItem("sayotheme", themeMode); } catch {}
+}
+document.getElementById("theme-btn")?.addEventListener("click", () => {
+  themeMode = THEMES[(THEMES.indexOf(themeMode) + 1) % THEMES.length]; applyTheme();
+});
+applyTheme();
